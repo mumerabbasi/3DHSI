@@ -17,9 +17,6 @@ Given a natural-language instruction, one calibrated RGB view, and a reconstruct
 
 </div>
 
-> [!IMPORTANT]
-> This repository contains the **static 3D human–scene interaction thesis system**. It produces one scene-grounded interaction state, not a temporal 4D sequence. The dynamic human–object pipeline is a separate project.
-
 The central idea is to treat **scene-side contact** as the bridge between foundation-model knowledge and metric 3D geometry. Instead of trusting a generated interaction image as the final answer, the system asks an image model to mark the precise object-surface region for each required body-part contact. A vision-language model verifies those regions and requests corrections before they are projected onto the scene mesh and used to optimize the body. Floor-support contacts follow a separate SAM 3 segmentation branch.
 
 The complete pipeline is zero-shot with respect to 3D human–scene interaction: it does not train or fine-tune on paired 3D HSI data. It does use pretrained foundation models, monocular human recovery, calibrated camera geometry, and differentiable optimization.
