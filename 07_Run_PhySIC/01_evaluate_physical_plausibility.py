@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""Evaluate PhySIC humans with Module 06's authoritative evaluator."""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+from physic_eval_utils import (
+    DEFAULT_OUTPUT_MODE,
+    PROJECT_DIR,
+    discover_physic_interactions,
+    load_python_module,
+    physic_eval_root,
+    physic_output_root,
+)
+
+
+BASE = load_python_module(
+    "module06_physical_for_physic",
+    PROJECT_DIR / "06_Evaluate_Interaction" / "01_evaluate_physical_plausibility.py",
+)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Evaluate PhySIC by swapping its optimized human into Module 06."
+    )
+    parser.add_argument("--interaction_name", default="interaction_01")
+    parser.add_argument("--output_mode", default=DEFAULT_OUTPUT_MODE)
+    parser.add_argument("--output_root", type=Path, default=None)
+    parser.add_argument("--device", default="cuda:0")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    names = (
+        discover_physic_interactions(args.output_mode)
+        if args.interaction_name == "all"
+        else [args.interaction_name]
+    )
+    source_root = physic_output_root(args.output_mode)
+    model_spec = BASE.SMPLXModelSpec(
+        model_path=PROJECT_DIR.parent / "Phy-SIC" / "data" / "body_models",
+        gender="neutral",
+        use_pca=False,
+        num_pca_comps=12,
+        flat_hand_mean=True,
+    )
+    items = [
+        BASE.ExternalHumanEvaluationInput(
+            interaction_name=name,
+            human_mesh_world=source_root / name / "meshes" / "human_world.ply",
+            optimized_params_camera=(
+                source_root / name / "debug" / "params" / "optimized_frame_0000.pt"
+            ),
+            smplx_model=model_spec,
+        )
+        for name in names
+    ]
+    output_base = (
+        args.output_root.resolve()
+        if args.output_root is not None
+        else physic_eval_root(args.output_mode)
+    )
+    BASE.evaluate_external_world_humans(items, output_base, args.device)
+
+
+if __name__ == "__main__":
+    main()
