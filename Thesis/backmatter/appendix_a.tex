@@ -1,0 +1,1000 @@
+\chapter{Additional Material}
+\label{app:additional-material}
+ 
+\section{Evaluation Scene Mapping}
+\label{app:scene-mapping}
+ 
+The 23 evaluation interactions of \cref{tab:exp-interactions} are defined over 15 ScanNet++ scenes. \Cref{tab:scene-mapping} gives the scene identifier and official ScanNet++ scene type for each scene, together with the interaction numbers that use it. Rows with multiple interaction numbers indicate that several instructions are evaluated in different views of the same reconstructed scene.
+ 
+\begin{table}[htbp]
+  \centering
+  \caption[Evaluation scene mapping.]{Mapping from the 15 ScanNet++ scenes to the 23 evaluation interactions. Scene types follow the official ScanNet++ metadata.}
+  \label{tab:scene-mapping}
+  \small
+  \begin{tabularx}{\textwidth}{@{}l l X@{}}
+    \toprule
+    Scene ID & Scene type & Interaction numbers in \cref{tab:exp-interactions} \\
+    \midrule
+    \texttt{442b144761} & Conference room & 1, 10 \\
+    \texttt{6126572846} & Conference room & 2, 3 \\
+    \texttt{c085ff3df4} & Bathroom & 4--9 \\
+    \texttt{eea4ad9c04} & Living room / lounge & 11, 12 \\
+    \texttt{c173f62b15} & Living room / lounge & 13 \\
+    \texttt{e86c6742b9} & Bedroom / hotel & 14 \\
+    \texttt{32280ecbca} & Bedroom / hotel & 15 \\
+    \texttt{d902931864} & Apartment & 16 \\
+    \texttt{5166da6131} & Office & 17 \\
+    \texttt{bfcfe53c6a} & Apartment & 18 \\
+    \texttt{4d451d9c36} & Office & 19 \\
+    \texttt{7692b88644} & Gym & 20 \\
+    \texttt{6ffdcc3022} & Bathroom & 21 \\
+    \texttt{c856c41c99} & Gym & 22 \\
+    \texttt{d110b8f8b0} & Bedroom / hotel & 23 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+ 
+\section{Foundation Model Prompts}
+\label{app:foundation-model-prompts}
+ 
+This appendix records the prompts used by the foundation-model stages of the method and by the vision-language evaluation.
+
+\subsection{SIG Generation Prompt}
+\label{app:prompt-sig}
+
+\begin{promptblock}
+You generate a Scene Interaction Graph (SIG) for a static human-scene interaction.
+
+Produce a compact graph containing the target object or objects, relevant human
+body parts, direct physical contact edges, and a static interaction description.
+
+Input:
+- A scene image from the selected camera view.
+- A JSON request:
+
+{
+  "interaction": "short interaction description"
+}
+
+Output only valid JSON. Do not include markdown or commentary.
+
+Required output schema:
+
+{
+  "target_objects": [
+    {
+      "id": "target_object_1",
+      "label": "short primary target object name"
+    },
+    {
+      "id": "target_object_2",
+      "label": "short secondary target object name"
+    }
+  ],
+  "human_part_nodes": [
+    "person 1, left hand",
+    "person 1, right hand"
+  ],
+  "scene_nodes": [
+    "target_object_1",
+    "target_object_2",
+    "floor"
+  ],
+  "interaction_edges": [
+    {
+      "human_part": "left hand",
+      "scene_element": "target_object_1",
+      "notes": "brief reason for this contact"
+    }
+  ],
+  "interaction": "Static interaction description under 150 words."
+}
+
+Rules:
+
+1. Use the interaction text to identify the intended human-scene contact, and use the image only to understand visible object context.
+2. `target_objects` should contain the scene object that receive direct human contact in the static pose.
+3. Use one target object when the contact is with a single object or multiple structural parts of the same object, such as a chair back, bed frame, or bathtub side.
+4. Use two target objects only when two separate scene objects are directly contacted. For example, use "bathtub" and "curtain rail" when one foot contacts the bathtub and one hand contacts the curtain rail.
+5. Keep target object labels short noun phrases.
+6. Use human part nodes only from this vocabulary:
+   - left hand
+   - right hand
+   - left arm
+   - right arm
+   - left leg
+   - right leg
+   - left foot
+   - right foot
+   - head
+   - hips
+   - back
+7. Include a human part node only when that part is physically important for contact or pose.
+8. `scene_nodes` can include only:
+   - target_object_1
+   - target_object_2
+   - floor
+9. Include `target_object_2` only if it exists in `target_objects` and has at least one direct contact edge.
+10. `interaction_edges` represent direct physical contact only.
+11. Use `scene_element: "target_object_1"` or `scene_element: "target_object_2"` for contacts with the corresponding target object.
+12. Use floor edges only for required direct floor support. If there is no floor contact, simply omit `floor` from `scene_nodes` and `interaction_edges`.
+13. Do not create object-part nodes.
+14. Keep interaction edges focused on physically necessary contacts.
+15. The output `interaction` must describe the static pose and physical contacts under 150 words. It must explicitly restate every `interaction_edges` contact using the same side-specific human part names, such as "left hand", "right foot", or "back", and the contacted scene object label or floor. Avoid vague phrases such as "one hand", "both feet", or "legs" when the edge uses specific left/right parts. It should also describe clothing, shoes, hair, and facial expression.
+
+Few-shot examples:
+
+These few-shot examples are written without a scene image. They demonstrate the
+expected JSON structure and explicit contact wording. For the real request, use
+the provided scene image to decide the exact contact configuration, including
+which side-specific hand, foot, leg, or arm is in contact.
+
+Example 1 input JSON:
+
+{
+  "interaction": "a person lifting the brown small wooden table with both hands"
+}
+
+Example 1 output:
+
+{
+  "target_objects": [
+    {
+      "id": "target_object_1",
+      "label": "brown small wooden table"
+    }
+  ],
+  "human_part_nodes": [
+    "person 1, left hand",
+    "person 1, right hand",
+    "person 1, left foot",
+    "person 1, right foot"
+  ],
+  "scene_nodes": [
+    "target_object_1",
+    "floor"
+  ],
+  "interaction_edges": [
+    {
+      "human_part": "left hand",
+      "scene_element": "target_object_1",
+      "notes": "the left hand grips the table while preparing to lift"
+    },
+    {
+      "human_part": "right hand",
+      "scene_element": "target_object_1",
+      "notes": "the right hand grips the opposite side of the table"
+    },
+    {
+      "human_part": "left foot",
+      "scene_element": "floor",
+      "notes": "the left foot supports the standing pose on the floor"
+    },
+    {
+      "human_part": "right foot",
+      "scene_element": "floor",
+      "notes": "the right foot supports the standing pose on the floor"
+    }
+  ],
+  "interaction": "A person stands beside the brown small wooden table in a forward-leaning pose. The left hand grips one side of the brown small wooden table, the right hand grips the opposite side, the left foot is planted on the floor, and the right foot is planted on the floor. The person has short black hair, a neutral focused facial expression, a gray shirt, blue jeans, and white sneakers."
+}
+
+Example 2 input JSON:
+
+{
+  "interaction": "a person lying on bed with his head on the pillow"
+}
+
+Example 2 output:
+
+{
+  "target_objects": [
+    {
+      "id": "target_object_1",
+      "label": "bed with pillows"
+    }
+  ],
+  "human_part_nodes": [
+    "person 1, left leg",
+    "person 1, right leg",
+    "person 1, head",
+    "person 1, hips",
+    "person 1, back"
+  ],
+  "scene_nodes": [
+    "target_object_1"
+  ],
+  "interaction_edges": [
+    {
+      "human_part": "head",
+      "scene_element": "target_object_1",
+      "notes": "the head rests on the pillow as part of the bed setup"
+    },
+    {
+      "human_part": "hips",
+      "scene_element": "target_object_1",
+      "notes": "the hips are supported by the mattress"
+    },
+    {
+      "human_part": "back",
+      "scene_element": "target_object_1",
+      "notes": "the back rests against the mattress"
+    },
+    {
+      "human_part": "left leg",
+      "scene_element": "target_object_1",
+      "notes": "the left leg rests on the bed"
+    },
+    {
+      "human_part": "right leg",
+      "scene_element": "target_object_1",
+      "notes": "the right leg rests on the bed"
+    }
+  ],
+  "interaction": "A person lies on the bed with pillows in a relaxed static pose. The head rests on a pillow, the back rests on the mattress, the hips are supported by the mattress, the left leg rests on the bed, and the right leg rests on the bed. The person has short black hair, a calm sleepy facial expression, a gray shirt, soft pants, and socks."
+}
+
+Example 3 input JSON:
+
+{
+  "interaction": "a person stepping over the bathtub wall, one foot inside the tub, the other foot still on the floor, one hand holding the curtain rail for balance"
+}
+
+Example 3 output:
+
+{
+  "target_objects": [
+    {
+      "id": "target_object_1",
+      "label": "bathtub"
+    },
+    {
+      "id": "target_object_2",
+      "label": "curtain rail"
+    }
+  ],
+  "human_part_nodes": [
+    "person 1, left hand",
+    "person 1, left foot",
+    "person 1, right foot"
+  ],
+  "scene_nodes": [
+    "target_object_1",
+    "target_object_2",
+    "floor"
+  ],
+  "interaction_edges": [
+    {
+      "human_part": "left hand",
+      "scene_element": "target_object_2",
+      "notes": "the left hand grips the curtain rail for balance"
+    },
+    {
+      "human_part": "left foot",
+      "scene_element": "target_object_1",
+      "notes": "the left foot presses inside the bathtub while stepping over the wall"
+    },
+    {
+      "human_part": "right foot",
+      "scene_element": "floor",
+      "notes": "the right foot stays planted on the floor outside the bathtub"
+    }
+  ],
+  "interaction": "A person steps over the bathtub wall in a careful balancing pose. The left hand grips the curtain rail, the left foot presses inside the bathtub, and the right foot is planted on the floor outside the tub. The person has short black hair, a focused facial expression, a gray shirt, rolled-up pants, and bare feet."
+}
+
+Example 4 input JSON:
+
+{
+  "interaction": "a person bending down in front of the lower drawer, one hand pulling the cabinet door open and the other hand holding the counter edge for balance"
+}
+
+Example 4 output:
+
+{
+  "target_objects": [
+    {
+      "id": "target_object_1",
+      "label": "lower cabinet door"
+    },
+    {
+      "id": "target_object_2",
+      "label": "counter edge"
+    }
+  ],
+  "human_part_nodes": [
+    "person 1, left hand",
+    "person 1, right hand",
+    "person 1, left foot",
+    "person 1, right foot",
+    "person 1, hips"
+  ],
+  "scene_nodes": [
+    "target_object_1",
+    "target_object_2",
+    "floor"
+  ],
+  "interaction_edges": [
+    {
+      "human_part": "left hand",
+      "scene_element": "target_object_1",
+      "notes": "the left hand pulls the lower cabinet door"
+    },
+    {
+      "human_part": "right hand",
+      "scene_element": "target_object_2",
+      "notes": "the right hand holds the counter edge for balance"
+    },
+    {
+      "human_part": "left foot",
+      "scene_element": "floor",
+      "notes": "the left foot supports the squat on the floor"
+    },
+    {
+      "human_part": "right foot",
+      "scene_element": "floor",
+      "notes": "the right foot supports the squat on the floor"
+    }
+  ],
+  "interaction": "A person bends down in front of the lower cabinet door in a balanced pose. The left hand pulls the lower cabinet door, the right hand holds the counter edge, the left foot is planted on the floor, and the right foot is planted on the floor. The person has short black hair, a neutral concentrated facial expression, a gray shirt, blue jeans, and white sneakers."
+}
+
+Example 5 input JSON:
+
+{
+  "interaction": "a person hanging from the pull-up bar with both hands, elbows bent, knees tucked upward, and both feet off the floor"
+}
+
+Example 5 output:
+
+{
+  "target_objects": [
+    {
+      "id": "target_object_1",
+      "label": "pull-up bar"
+    }
+  ],
+  "human_part_nodes": [
+    "person 1, left hand",
+    "person 1, right hand"
+  ],
+  "scene_nodes": [
+    "target_object_1"
+  ],
+  "interaction_edges": [
+    {
+      "human_part": "left hand",
+      "scene_element": "target_object_1",
+      "notes": "the left hand grips the pull-up bar"
+    },
+    {
+      "human_part": "right hand",
+      "scene_element": "target_object_1",
+      "notes": "the right hand grips the pull-up bar"
+    }
+  ],
+  "interaction": "A person hangs from the pull-up bar with elbows bent and knees tucked upward. The left hand grips the pull-up bar, the right hand grips the pull-up bar, the left foot stays off the floor, and the right foot stays off the floor. The person has short black hair, a strained focused facial expression, a gray athletic shirt, dark shorts, and sneakers."
+}
+\end{promptblock}
+
+\subsection{Human-Frame Inpainting Prompt}
+\label{app:prompt-human-inpaint}
+
+\begin{promptblock}
+Input Image:
+
+- The image is the original scene. Use the interaction description to identify the existing
+target object that must remain fixed and contacted.
+
+Scene Preservation Instructions:
+
+- Use the provided scene image as a fixed camera reference.
+- Insert exactly one person performing the described interaction with the target object.
+- This frame must represent the pre-motion start state: the person is already in natural contact
+with the target object of the scene, but no visible object motion has begun yet.
+- Target object is already present in the scene. Do not add it.
+- Preserve the camera pose, field of view, perspective, room geometry, lighting, shadows, textures,
+and all existing object identities.
+- Do not add new furniture or remove existing items.
+- Keep the target object in exactly the same pose, position, orientation, scale, material,
+and appearance as in the original scene.
+- Do not move, rotate, deform, lift, translate, or reposition the target object in any way.
+- Only add the human in plausible contact, as if about to start the action in the next frame.
+
+Output:
+
+- Return only the edited scene image.
+\end{promptblock}
+
+\subsection{Best Human-Frame Selection Prompt}
+\label{app:prompt-best-frame-selection}
+
+\begin{promptblock}
+Attached images are provided in this order:
+{candidate_listing}
+
+Provided Images:
+
+Each image is a candidate generated human-frame result for the same fixed scene and the same human-object interaction.
+
+Task Description:
+
+Select the single candidate image that best matches the intended interaction and is most usable as the human frame for downstream contact estimation and static-scene optimization.
+
+Interaction:
+{interaction}
+
+Evaluation Requirements:
+
+1. Human Visibility:
+   Prefer images where the main human is fully visible from head to feet, clearly inside the frame, and not cropped by image borders.
+
+2. Human Anatomy:
+   Prefer normal human body proportions and body parts. Reject candidates with distorted, duplicated, missing, or anatomically implausible limbs, hands, feet, torso, or head.
+
+3. Interaction Match:
+   Prefer the image where the human-object interaction most directly matches the interaction text.
+
+4. Contact Correctness:
+   Prefer physically correct human contact with the target object. The contacting body parts should touch the intended object surface or object part without gaps, floating limbs, penetration artifacts, or impossible support.
+
+5. Plausible Pose and Support:
+   Prefer a natural, stable pose that could occur immediately before the interaction motion begins. Avoid floating humans, unsupported body weight, impossible leaning, and unnatural body-object relationships.
+
+6. Scene and Object Preservation:
+   The scene geometry must remain unchanged. The target object of interaction must keep the same shape, texture, appearance, pose, position, orientation, scale, material, and visible structure. Reject candidates where the target object is moved, deformed, duplicated, removed, retextured, or replaced.
+
+7. Image Quality:
+   Prefer clear, sharp images. Avoid motion blur, smeared body parts, severe generation artifacts, or visual clutter that makes the contact ambiguous.
+
+8. Realistic Style:
+   Prefer photographic or realistic images over cartoons, drawings, illustrations, or highly stylized images.
+
+9. Tie Break:
+   After detailed inspection, if all candidate images are effectively the same quality and none is clearly better, choose frame_00.png.
+
+Return strictly valid JSON only:
+
+```json
+{
+  "selected_frame": "frame_XX.png",
+  "reason": "short reason"
+}
+```
+
+The selected_frame value must be exactly one filename from the provided candidate list.
+\end{promptblock}
+
+\subsection{Agentic Contact-Overlay Prompt}
+\label{app:prompt-contact-overlay}
+
+\begin{promptblock}
+Attached images are provided in this order:
+Image 1: 01_reference_image.png - Reference Image
+Image 2: 02_canvas_image.png - Canvas Image
+Image 3: 03_previous_composite.png - Previous Composite
+
+Provided Images:
+
+Image 1: Reference Image
+An image showing a human interacting with the target object. Use this image only to infer which human body parts are physically contacting the target object and which object-surface regions are being touched.
+
+Image 2: Canvas Image
+An image of the same scene without the human. Use this image as the base image and as the authoritative reference for the target object's final position, pose, geometry, and boundaries.
+
+Optional Image 3: Previous Composite
+If provided, this image shows the previous round's Canvas Image with generated colored contact masks. Use it only as correction context for the VLM evaluator's feedback. If the evaluator says its masks are correct, copy the correct masks from it to the corresponding locations onto the Canvas Image. Also, draw the new corrected masks, according to the evaluator instructions, onto the Canvas Image.
+
+Task Description:
+
+Generate an edited copy of the Canvas Image with solid-color segmentation masks overlaid only on the target object surface regions that are contacted by the human in the Reference Image.
+
+Infer the contacted region relative to the target object in the Reference Image, then place the corresponding contact mask on the matching object region in the Canvas Image.
+
+Critical Base-Image Rule:
+Use the Canvas Image as the only valid base image. Preserve the Canvas Image exactly and only add the specified solid-color contact masks. Do not use the Reference Image as the base. Do not redraw, regenerate, stylize, relight, crop, pad, resize, move, or otherwise alter the Canvas Image.
+
+Analysis Requirements:
+
+1. Contact Inference:
+   Analyze the Reference Image to determine which specified human body parts are physically touching the target object.
+
+2. Object-Region Identification:
+   For each contacting body part, identify the specific region of the target object being touched, such as the tabletop front edge, tabletop side edge, tabletop upper surface, tabletop underside, table leg, chair seat, chair arm, cabinet handle, ladder rung, rail, shelf, handle, edge, or other relevant object part.
+
+3. Object-Relative Localization:
+   Map each inferred contact region onto the corresponding part of the target object in the Canvas Image. Use the Canvas Image object pose and boundaries as ground truth. Prioritize correct placement on the object in the Canvas Image over exact pixel alignment with the Reference Image.
+
+4. Contact Footprint Generation:
+   Create a localized contact mask only on the object surface where contact occurs. The mask should represent the apparent contact footprint on the object, not the full visible human body part.
+
+Execution Requirements:
+
+Base Image:
+Return the Canvas Image with the contact masks overlaid on top of it.
+
+Canvas Size:
+Match the Canvas Image dimensions and coordinate system.
+
+Mask Placement:
+Place each mask on the corresponding target-object region in the Canvas Image, using object-relative correspondence rather than direct coordinate transfer.
+
+Mask Shape:
+Use precise, dense, solid-color segmentation masks shaped like the localized contact footprint on the object surface. The mask should reflect the approximate size, orientation, and extent of the contact implied by the touching body part.
+
+Object-Surface Clipping:
+All mask pixels must be clipped strictly to the target object boundary in the Canvas Image. No mask may extend onto the human body, floor, wall, background, or any non-target-object region.
+
+Scene Preservation:
+Use the Canvas Image as a fixed camera reference. Preserve the camera pose, field of view, perspective, resolution, aspect ratio, room geometry, lighting, shadows, textures, and all existing object identities.
+Keep the target object in exactly the same pose, position, orientation, scale, material, and appearance as in the Canvas Image. Do not move, rotate, deform, lift, translate, resize, crop, pad, or reposition the target object or any other scene element in any way.
+Only add the specified solid-color contact mask overlays. Leave every non-overlay pixel visually unchanged from the Canvas Image.
+
+Colors:
+Use only the exact specified solid colors for the contacting body-part masks. Do not use transparency, antialiasing gradients, shadows, blended colors, or pastel variants.
+
+Color Mapping for ContactMasks:
+{color_mapping_for_contact_masks}
+
+Required target-object contacts from SIG:
+{required_contacts}
+
+Restrictions:
+Do not add the generated human body.
+Do not copy or paste the full visible hand, foot, hip, arm, leg, or other body-part silhouette.
+Do not transfer masks by raw Reference Image pixel coordinates.
+Do not add text labels, arrows, legends, boxes, keypoints, outlines, or any other annotations.
+Show only the original Canvas Image with solid localized contact masks overlaid on the target object.
+
+Example Guidance:
+If the Reference Image shows a person gripping a ladder, infer which rungs or rails the hands and feet contact. Then place solid masks on those same ladder regions in the Canvas Image, aligned to the ladder as it appears in the Canvas Image.
+\end{promptblock}
+
+\subsection{Agentic Contact-Verification Prompt}
+\label{app:prompt-contact-eval}
+
+\begin{promptblock}
+Attached images are provided in this order:
+Image 1: 01_reference_image.png - Reference Image
+Image 2: 02_canvas_image.png - Original Canvas Image
+Image 3: composite.png - Current Composite Image
+
+Provided Images:
+
+Image 1: Reference Image.
+This image shows the ground-truth human-object interaction. Use the visible human pose and target-object geometry in this image as the ground truth for which body parts contact the target object and where those contacts occur on the object surfaces.
+
+Image 2: Original Canvas Image.
+This image shows the same scene without the human. This is the authoritative geometry and base image.
+
+Image 3: Current Composite Image.
+This is the original Canvas image with colored contact masks pasted onto it. Evaluate only the colored masks.
+
+Target object:
+{target_object}
+
+Color mapping:
+{color_mapping}
+
+Required target-object contacts from SIG:
+{required_contacts}
+
+Task Description:
+Decide whether the colored masks in the Current Composite Image correctly reproduce the localized target-object contact positions observed in the Reference Image. Masks represent the contact footprints on the object, not the full visible human body part.
+
+Focus especially on reference alignment. For each mask, first identify where the corresponding body part contacts the target object in the Reference Image, then check whether the mask is placed on the matching object part and local surface in the Current Composite Image.
+
+The required target-object contacts from SIG identify which body parts must be checked, but the Reference Image is authoritative for contact location. Do not accept a mask merely because it is plausible; accept it only if its position matches the contact location shown by the Reference Image, mapped onto the same object region in the Original Canvas Image.
+
+For partially occluded contacts, use the visible body pose, object boundaries, and contact context in the Reference Image to determine the most likely ground-truth contact footprint. Do not invent a different plausible contact location on the object if the Reference Image indicates a specific contacted surface or region.
+
+Evaluate these possible errors:
+1. Missing contact: a required SIG target-object contact is absent, or a body part visibly touches the target object in the Reference Image but its mask is absent.
+2. Extra contact: a mask exists for a body part that is not a required SIG target-object contact and does not visibly touch the target object.
+3. Wrong color: a contact uses the wrong color for the body part.
+4. Wrong object surface: the mask is not on the same object part or surface region contacted in the Reference Image, such as wrong rung, wrong rail, wrong edge, wrong handle, wrong shelf, wrong tabletop region, etc.
+5. Shifted mask: the mask is too far left, right, up, or down from the reference contact location after mapping that location to the Original Canvas Image.
+6. Size error: the mask is too large or too small for the local contact footprint visible or indicated by the Reference Image.
+
+For every problem, write a concrete correction instruction for the next ChatGPT image-generation prompt.
+
+Good correction examples:
+- "Keep the original canvas unchanged and move only the green right-foot mask upward onto the lower ladder rung."
+- "The yellow left-hand mask is missing. Add a small yellow mask on the vertical side rail where the left hand contacts the ladder."
+- "The yellow left-hand mask is not placed at the location where the left hand is touching the object in the Reference Image."
+- "The blue foot mask is on the wrong rung. Move it down to the rung directly under the visible foot contact."
+- "The red right-hand mask is too large. Keep its center but make it smaller and more focused."
+- "This mask is correct. Keep it unchanged."
+
+Bad correction examples:
+- "The result is bad."
+- "Fix the mask."
+- "Try again."
+
+Return strictly valid JSON only:
+
+```json
+{
+  "done": false,
+  "correction_instruction": "text"
+}
+```
+
+Set "done": true only if all required SIG target-object contacts are present, there are no extra masks, each mask uses the correct color, and each mask matches the contact surface, location, and size indicated by the Reference Image when mapped onto the Original Canvas Image.
+\end{promptblock}
+
+\subsection{Interaction Rubric Evaluation Prompt}
+\label{app:prompt-interaction-eval}
+ 
+\begin{promptblock}
+### ROLE
+You are a strict 3D Human-Scene Interaction quality assurance agent.
+ 
+### INPUT DATA
+Interaction Instruction:
+{interaction}
+ 
+Rendered Views:
+Multiple rendered images of the same static 3D interaction from different viewpoints.
+ 
+### SCENE NOTE
+The human is placed in a reconstructed ScanNet++ mesh. The scene mesh may be incomplete, noisy, or have holes, missing geometry, and reconstruction artifacts. This is expected and must NOT affect any score.
+ 
+However, do NOT ignore physical conflicts between the human and meaningful scene objects. If the human body penetrates, passes through, is embedded inside, or is impossibly clipped by the target object or nearby solid scene structures such as a wall, ladder, chair, bed, table, cabinet, door, or floor, this must be penalized. Reconstruction noise should be ignored; body-object penetration with the intended interaction object should not be ignored.
+ 
+### TASK
+Judge whether the human's rendered interaction satisfies the instruction, using only the rendered views as evidence.
+ 
+Evaluate the human interaction itself:
+- whether the correct target object is used,
+- whether the pose expresses the requested action,
+- whether required body parts make plausible contact with the target object,
+- whether the body-object relation is physically plausible.
+ 
+Do not evaluate render aesthetics, texture quality, lighting, or scene reconstruction completeness.
+ 
+### IMPORTANT GEOMETRY AUDIT
+Before assigning scores, explicitly inspect the rendered views for the following issues:
+ 
+1. Target-object use:
+   - Is the human interacting with the correct object named in the instruction?
+   - Is the object actually the main support/contact object?
+ 
+2. Required body-part contacts:
+   - Identify the body parts required by the instruction, such as hands, feet, hips, back, knees, or torso.
+   - Check whether each required body part is visibly contacting or very plausibly close to the correct part of the object.
+   - Do not count visual overlap as contact. Contact must be anatomically and spatially plausible.
+   - A hand should appear to rest on, grip, press, or wrap around the relevant object part.
+   - A foot should appear supported by a floor, rung, stair, step, or surface, not merely hovering near it.
+ 
+3. Penetration and clipping:
+   - Check whether the human body passes through the target object.
+   - Check whether limbs, torso, head, or feet are embedded inside solid parts of the object.
+   - Check whether the human penetrates nearby solid scene elements such as walls, floors, doors, cabinets, beds, or furniture.
+   - If a body part appears inside the target object rather than on its surface, treat this as penetration, not contact.
+ 
+4. Support and weight-bearing:
+   - Check whether the pose has plausible support.
+   - For climbing, stepping, sitting, lying, leaning, reaching, or standing actions, the relevant supporting body parts must be placed on physically plausible support surfaces.
+   - If the body appears suspended, floating, or balanced without support, penalize physical plausibility.
+ 
+5. View consistency:
+   - Use all views together.
+   - If one clear view reveals severe penetration, floating, or impossible support, do not ignore it because another view looks acceptable.
+   - Prefer the views that best reveal contact, support, and penetration.
+ 
+### SCORE CAPS AND PENALTIES
+Apply these caps strictly:
+ 
+- If the human does not interact with the named target object, Target Object Correctness must be at most 2.
+- If the action is recognizable but the required contacts are missing or wrong, Human Action Correctness must be at most 3.
+- If required contact is only visual overlap, ambiguous, or hidden, Contact and Spatial Relation must be at most 3.
+- If a required body part is clearly floating instead of supported, Contact and Spatial Relation must be at most 3 and Physical Plausibility must be at most 3.
+- If the human severely penetrates the target object, Contact and Spatial Relation must be at most 2 and Physical Plausibility must be at most 2.
+- If the human penetrates a nearby solid scene element such as a wall, floor, door, cabinet, bed, or large furniture, Physical Plausibility must be at most 2.
+- If the torso, pelvis, or multiple limbs are inside the target object or wall, Physical Plausibility must be 1 or 2.
+- If the pose is broadly action-like but physically awkward, such as both feet crowded on the same ladder rung/step when stepping down, score it as partially correct, not fully correct.
+- Do not give a 5 for Contact and Spatial Relation unless all instruction-specified contacts are clearly plausible.
+- Do not give a 5 for Physical Plausibility if there is any visible floating, major penetration, impossible balance, or nonsensical support.
+ 
+### SCALE
+1 = Incorrect, missing, or impossible to judge.
+2 = Mostly incorrect, very unclear, or physically invalid.
+3 = Partially correct, but ambiguous, incomplete, awkward, or weakly supported.
+4 = Mostly correct with minor contact, support, or pose issues.
+5 = Clearly correct, physically plausible, and all required contacts are well satisfied.
+ 
+### CRITERIA
+1. Target Object Correctness:
+Does the human interact with the object or scene element named in the instruction?
+ 
+2. Human Action Correctness:
+Does the human pose express the requested action?
+ 
+3. Contact and Spatial Relation:
+Are the relevant body parts plausibly contacting or close to the correct scene element, without confusing overlap or penetration for contact?
+ 
+4. Physical Plausibility:
+Is the human pose and body-object relation plausible, without severe floating, penetration, impossible support, unsupported balance, or nonsensical placement?
+ 
+### OUTPUT FORMAT
+Return ONLY a valid JSON object, no markdown or extra text:
+ 
+{
+  "criteria": {
+    "target_object_correctness": { "score_1_to_5": 0, "reason": "" },
+    "human_action_correctness": { "score_1_to_5": 0, "reason": "" },
+    "contact_and_spatial_relation": { "score_1_to_5": 0, "reason": "" },
+    "physical_plausibility": { "score_1_to_5": 0, "reason": "" }
+  },
+  "best_view_ids": [],
+  "failure_modes": [],
+  "brief_summary": ""
+}
+\end{promptblock}
+ 
+ 
+\section{Vision-Language Evaluation Rubric}
+\label{app:vlm-rubric}
+ 
+This section gives the rubric used by the vision-language evaluator of \cref{sec:exp-metrics-vlm}. For each interaction, the evaluator is shown the rendered views together with the interaction instruction and assigns four integer scores, each on the shared $1$-to-$5$ scale of \cref{tab:vlm-scale}. The four criteria and their scoring rules are given in \cref{tab:vlm-criteria}. The caps encode the principle that an interaction cannot be scored highly if a required contact is missing, if a contact is clearly floating, or if the body penetrates the scene, regardless of how convincing the interaction appears otherwise. The full prompt that implements this rubric is given in \cref{app:prompt-interaction-eval}.
+ 
+\begin{table}[t]
+  \centering
+  \caption[Shared vision-language rubric scale.]{The shared $1$-to-$5$ scale used for all four rubric criteria.}
+  \label{tab:vlm-scale}
+  \begin{tabularx}{\textwidth}{@{}cX@{}}
+    \toprule
+    Score & Meaning \\
+    \midrule
+    1 & Incorrect, missing, or impossible to judge. \\
+    2 & Mostly incorrect, very unclear, or physically invalid. \\
+    3 & Partially correct, but ambiguous, incomplete, awkward, or weakly supported. \\
+    4 & Mostly correct, with minor contact, support, or pose issues. \\
+    5 & Clearly correct and physically plausible, with the required contacts well satisfied. \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+ 
+\begin{table}[t]
+  \centering
+  \caption[Vision-language rubric criteria and scoring rules.]{The four rubric criteria and their scoring rules. Each criterion is scored on the scale of \cref{tab:vlm-scale}, subject to the caps listed.}
+  \label{tab:vlm-criteria}
+  \begin{tabularx}{\textwidth}{@{}>{\bfseries}p{0.24\textwidth}X@{}}
+    \toprule
+    Criterion & Description and caps \\
+    \midrule
+    Target-object correctness &
+    Whether the person interacts with the object or scene element named in the instruction, and whether it is the main support or contact object. Capped at $2$ if the person does not interact with the named target object. \\
+    \addlinespace
+    Human-action correctness &
+    Whether the pose expresses the requested action. Capped at $3$ if the action is recognizable but the required contacts are missing or wrong. A broadly action-like but physically awkward pose receives partial rather than full credit. \\
+    \addlinespace
+    Contact and spatial relation &
+    Whether the instruction-relevant body parts plausibly contact, grip, rest on, press, or lie appropriately close to the correct object region. Required contact that is only visual overlap, ambiguous, or hidden caps the score at $3$; a required body part clearly floating instead of being supported also caps it at $3$; severe penetration of the target object caps it at $2$; a score of $5$ requires all instruction-specified contacts to be clearly plausible. \\
+    \addlinespace
+    Physical plausibility &
+    Whether the body--object arrangement has plausible support, balance, placement, and collision behavior. A required body part clearly floating instead of being supported caps the score at $3$; severe penetration of the target object caps it at $2$; penetration of a nearby solid scene element caps it at $2$; if the torso, pelvis, or multiple limbs are inside the target object or a wall, the score must be $1$ or $2$; any visible floating, major penetration, impossible balance, or nonsensical support rules out a score of $5$. \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+ 
+The reported per-interaction score is the mean of the four criterion scores, and the dataset-level scores are the means of the per-interaction values, computed independently for each criterion and for the mean.
+ 
+\clearpage
+\section{Additional Qualitative Results}
+\label{app:qualitative-gallery}
+ 
+This section complements the nine interactions shown in the main qualitative galleries with the remaining fourteen evaluation interactions, in their evaluation-set order. \Cref{fig:app-qualitative-ablation} compares GVHMR init, Single-shot, and Full method, following \cref{fig:exp-qualitative-ablation}; \cref{fig:app-qualitative-baseline} compares PhySIC and Full method, following \cref{fig:exp-qualitative-baseline}. Every setting is shown from the same two selected views, and the method names match \cref{tab:exp-quantitative}.
+ 
+\begin{landscape}
+\begingroup
+  \setlength{\qualresultwidth}{0.13\linewidth}%
+  \setlength{\qualresultheight}{0.14\linewidth}%
+  \setlength{\qualframeheight}{0.105\linewidth}%
+  \setlength{\qualrowheight}{0.17\linewidth}%
+ 
+  \begin{figure}[p]
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \small
+    \begin{tabular}{@{}p{0.16\linewidth} cc cc cc@{}}
+      \qualablationheader
+      \qualablationrow{table}{1}{Sitting on the wooden table}
+      \qualablationrow{chair}{2}{Pulling back the chair}
+      \bottomrule
+    \end{tabular}
+    \caption[Additional qualitative ablation comparisons.]{Additional qualitative ablation comparisons for the fourteen appendix interactions. The leftmost cell identifies the interaction; the remaining columns show two views each for GVHMR init, Single-shot, and Full method. Complete instructions are given in \cref{tab:exp-interactions}.}
+    \label{fig:app-qualitative-ablation}
+  \end{figure}
+ 
+  \begin{figure}[p]
+    \ContinuedFloat
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \small
+    \begin{tabular}{@{}p{0.16\linewidth} cc cc cc@{}}
+      \qualablationheader
+      \qualablationrow{door}{3}{Opening the door}
+      \qualablationrow{faucet}{4}{Turning on the faucet}
+      \bottomrule
+    \end{tabular}
+    \caption[]{Additional qualitative ablation comparisons (continued).}
+  \end{figure}
+ 
+  \begin{figure}[p]
+    \ContinuedFloat
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \small
+    \begin{tabular}{@{}p{0.16\linewidth} cc cc cc@{}}
+      \qualablationheader
+      \qualablationrow{washingmachine}{5}{Opening the washing machine}
+      \qualablationrow{coffee}{7}{Making coffee}
+      \bottomrule
+    \end{tabular}
+    \caption[]{Additional qualitative ablation comparisons (continued).}
+  \end{figure}
+ 
+  \begin{figure}[p]
+    \ContinuedFloat
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \small
+    \begin{tabular}{@{}p{0.16\linewidth} cc cc cc@{}}
+      \qualablationheader
+      \qualablationrow{shower}{8}{Taking a shower}
+      \qualablationrow{vacuum}{9}{Taking out the vacuum cleaner}
+      \bottomrule
+    \end{tabular}
+    \caption[]{Additional qualitative ablation comparisons (continued).}
+  \end{figure}
+
+  \begin{figure}[p]
+    \ContinuedFloat
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \small
+    \begin{tabular}{@{}p{0.16\linewidth} cc cc cc@{}}
+      \qualablationheader
+      \qualablationrow{sofaplant}{12}{Sitting beside the sofa and plant}
+      \qualablationrow{shelf}{13}{Sitting on the shelf}
+      \bottomrule
+    \end{tabular}
+    \caption[]{Additional qualitative ablation comparisons (continued).}
+  \end{figure}
+
+  \begin{figure}[p]
+    \ContinuedFloat
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \small
+    \begin{tabular}{@{}p{0.16\linewidth} cc cc cc@{}}
+      \qualablationheader
+      \qualablationrow{lamp}{15}{Reaching for the bedside lamp}
+      \qualablationrow{chocolate}{16}{Reaching for the chocolate}
+      \bottomrule
+    \end{tabular}
+    \caption[]{Additional qualitative ablation comparisons (continued).}
+  \end{figure}
+
+  \begin{figure}[p]
+    \ContinuedFloat
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \small
+    \begin{tabular}{@{}p{0.16\linewidth} cc cc cc@{}}
+      \qualablationheader
+      \qualablationrow{drawer}{18}{Opening the lower drawer}
+      \qualablationrow{treadmill}{22}{Running on the treadmill}
+      \bottomrule
+    \end{tabular}
+    \caption[]{Additional qualitative ablation comparisons (continued).}
+  \end{figure}
+
+  \clearpage
+  \setlength{\qualresultwidth}{0.20\linewidth}%
+  \setlength{\qualresultheight}{0.19\linewidth}%
+  \setlength{\qualframeheight}{0.14\linewidth}%
+  \setlength{\qualrowheight}{0.22\linewidth}%
+
+  \begin{figure}[p]
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \small
+    \begin{tabular}{@{}p{0.16\linewidth} cc cc@{}}
+      \qualbaselineheader
+      \qualbaselinerow{table}{1}{Sitting on the wooden table}
+      \qualbaselinerow{chair}{2}{Pulling back the chair}
+      \bottomrule
+    \end{tabular}
+    \caption[Additional qualitative baseline comparisons.]{Additional qualitative baseline comparisons for the fourteen appendix interactions. The leftmost cell identifies the interaction; the remaining columns show two views each for PhySIC and Full method. Complete instructions are given in \cref{tab:exp-interactions}.}
+    \label{fig:app-qualitative-baseline}
+  \end{figure}
+
+  \begin{figure}[p]
+    \ContinuedFloat
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \small
+    \begin{tabular}{@{}p{0.16\linewidth} cc cc@{}}
+      \qualbaselineheader
+      \qualbaselinerow{door}{3}{Opening the door}
+      \qualbaselinerow{faucet}{4}{Turning on the faucet}
+      \bottomrule
+    \end{tabular}
+    \caption[]{Additional qualitative baseline comparisons (continued).}
+  \end{figure}
+
+  \begin{figure}[p]
+    \ContinuedFloat
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \small
+    \begin{tabular}{@{}p{0.16\linewidth} cc cc@{}}
+      \qualbaselineheader
+      \qualbaselinerow{washingmachine}{5}{Opening the washing machine}
+      \qualbaselinerow{coffee}{7}{Making coffee}
+      \bottomrule
+    \end{tabular}
+    \caption[]{Additional qualitative baseline comparisons (continued).}
+  \end{figure}
+
+  \begin{figure}[p]
+    \ContinuedFloat
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \small
+    \begin{tabular}{@{}p{0.16\linewidth} cc cc@{}}
+      \qualbaselineheader
+      \qualbaselinerow{shower}{8}{Taking a shower}
+      \qualbaselinerow{vacuum}{9}{Taking out the vacuum cleaner}
+      \bottomrule
+    \end{tabular}
+    \caption[]{Additional qualitative baseline comparisons (continued).}
+  \end{figure}
+
+  \begin{figure}[p]
+    \ContinuedFloat
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \small
+    \begin{tabular}{@{}p{0.16\linewidth} cc cc@{}}
+      \qualbaselineheader
+      \qualbaselinerow{sofaplant}{12}{Sitting beside the sofa and plant}
+      \qualbaselinerow{shelf}{13}{Sitting on the shelf}
+      \bottomrule
+    \end{tabular}
+    \caption[]{Additional qualitative baseline comparisons (continued).}
+  \end{figure}
+
+  \begin{figure}[p]
+    \ContinuedFloat
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \small
+    \begin{tabular}{@{}p{0.16\linewidth} cc cc@{}}
+      \qualbaselineheader
+      \qualbaselinerow{lamp}{15}{Reaching for the bedside lamp}
+      \qualbaselinerow{chocolate}{16}{Reaching for the chocolate}
+      \bottomrule
+    \end{tabular}
+    \caption[]{Additional qualitative baseline comparisons (continued).}
+  \end{figure}
+
+  \begin{figure}[p]
+    \ContinuedFloat
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \small
+    \begin{tabular}{@{}p{0.16\linewidth} cc cc@{}}
+      \qualbaselineheader
+      \qualbaselinerow{drawer}{18}{Opening the lower drawer}
+      \qualbaselinerow{treadmill}{22}{Running on the treadmill}
+      \bottomrule
+    \end{tabular}
+    \caption[]{Additional qualitative baseline comparisons (continued).}
+  \end{figure}
+\endgroup
+\end{landscape}
+ 

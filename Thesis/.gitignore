@@ -1,0 +1,13 @@
+*.aux
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+*.lof
+*.log
+*.lot
+*.out
+*.synctex.gz
+*.toc
+build/*
+Sample_Thesis

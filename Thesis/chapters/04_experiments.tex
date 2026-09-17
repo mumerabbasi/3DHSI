@@ -1,0 +1,515 @@
+\chapter{Experiments}
+\label{chap:experiments}
+
+This chapter evaluates the proposed method. It describes the evaluation set of reconstructed scenes and interaction instructions (\cref{sec:exp-setup}), the implementation details and hyperparameters used throughout (\cref{sec:implementation-details}), the evaluation metrics (\cref{sec:exp-metrics}), and the baseline and ablation settings (\cref{sec:exp-baseline-ablation}). It then reports a qualitative study of the agentic contact-localization stage (\cref{sec:exp-agentic-qualitative}), the main quantitative results (\cref{sec:exp-quantitative}), and qualitative results (\cref{sec:exp-qualitative}), and closes with an analysis of failure cases (\cref{sec:exp-failure}).
+
+\section{Experimental Setup}
+\label{sec:exp-setup}
+
+\paragraph{Scenes and interactions.} The method is evaluated on 23 interaction instructions defined over 15 real reconstructed indoor scenes from ScanNet++~\cite{yeshwanth2023scannetpp}. The scenes span a range of everyday indoor environments, including bedrooms, bathrooms, offices, conference rooms, apartments, living rooms, and gyms, and for each scene one posed RGB view is selected together with its calibration and the reconstructed scene mesh. The interaction instructions are written to exercise the full range of interactions the method targets: simple support interactions such as sitting; functional interactions whose contact falls on a small element such as a faucet, a lamp, or a drawer; and interactions whose contact falls on a large functional surface such as a treadmill rail and belt, a pull-up bar, a bicycle handle, or a ladder frame. \Cref{tab:exp-interactions} lists all 23 interactions together with the scene each is defined in.
+
+The instructions also vary in the number and type of contacts they require. Some involve a single hand contact (for example, turning on a faucet), while others require several simultaneous contacts distributed over the body (for example, running on the treadmill, which involves two hands and a foot, or climbing a ladder, which involves both hands and both feet). This variety is deliberate: it tests whether the method can localize and satisfy contact not only for isolated functional elements but also for interactions in which multiple body parts must contact different regions of the same object at once.
+
+\begin{table}[!htbp]
+  \centering
+  \caption[Evaluation interactions.]{The 23 evaluation interactions, each with a number used to refer to it elsewhere in this chapter, and the type of scene in which it is defined. The mapping from each interaction to its ScanNet++ scene is given in \cref{app:scene-mapping}.}
+  \label{tab:exp-interactions}
+  \small
+  \begin{tabularx}{\textwidth}{@{}llX@{}}
+    \toprule
+    \# & Scene type & Interaction instruction \\
+    \midrule
+    1  & Conference room & A person sitting on the small wooden table \\
+    2  & Conference room & A person pulling back the chair to sit down \\
+    3  & Conference room & A person opening the door \\
+    4  & Bathroom & A person turning on the faucet \\
+    5  & Bathroom & A person opening the washing machine door \\
+    6  & Bathroom & A person opening a curtain \\
+    7  & Bathroom & A person making coffee \\
+    8  & Bathroom & A person taking a shower \\
+    9  & Bathroom & A person taking out the vacuum cleaner with both hands \\
+    10 & Conference room & A person lifting the small wooden table with both hands \\
+    11 & Living room / lounge & A person sitting on the bicycle with both hands on the handle \\
+    12 & Living room / lounge & A person sitting on the side of the sofa, playing with the leaves of a nearby potted plant using both hands \\
+    13 & Living room / lounge & A person sitting on the shelf with both hands supporting their body and both legs hanging down \\
+    14 & Bedroom / hotel & A person standing on the staircase and climbing onto the top bed \\
+    15 & Bedroom / hotel & A person sitting on the bed and reaching to turn off the bedside lamp \\
+    16 & Apartment & A person sitting on the bed and reaching for the chocolate nearby \\
+    17 & Office & A person removing the bicycle from its stand with one foot while holding the bike with both hands \\
+    18 & Apartment & A person bending down at the lower drawer, one hand pulling the cabinet door open and the other holding the counter edge for balance \\
+    19 & Office & A person climbing the step ladder, both feet on the ladder, reaching for the top of the cupboard \\
+    20 & Gym & A person hanging from the pull-up bar with both hands, knees tucked upward, and both feet off the floor \\
+    21 & Bathroom & A person stepping over the bathtub wall, one foot inside the tub, one hand holding the side glass for balance \\
+    22 & Gym & A person running on the treadmill, one foot on the belt, the other leg lifted behind, and both hands holding the side handles \\
+    23 & Bedroom / hotel & A person stepping down from the ladder, both feet on ladder steps and both hands gripping the ladder frame \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\paragraph{Ground-truth contact annotation.} Evaluating scene-side contact requires a reference for where each body part should contact the scene, and no such annotation exists for these instructions, so the contact regions are annotated manually. For each interaction, the region that each participating body part should contact is painted directly onto the posed scene view in a distinct, saturated color, following a fixed color-to-part convention, and per-part binary masks are extracted from the overlay by color, exactly as in the agentic contact-estimation stage of \cref{sec:method-contact-estimation}; the difference is that a human performs the overlay in place of the image generation model. Each region is drawn slightly larger than the apparent contact, so that the reference marks the surface the interaction requires rather than a precise footprint, and the annotation is guided by the generated human frame. This last choice is deliberate. Annotating from the instruction alone would fix the regions according to the annotator's conception of how the interaction should be performed, which need not agree with the configuration the frame depicts, and a hand placed on a different part of the object would then be scored as a localization error when it is a disagreement about the pose. Taking the frame as the shared premise instead isolates the question the evaluation asks: given the depicted interaction, does the method recover the scene regions it requires? The same frame is supplied to the baseline (\cref{sec:exp-baseline-ablation}), and the annotation was performed without reference to the contact regions produced by the method or by any compared setting, so it records where the contact should fall rather than where any of them placed it. The masks are used only for evaluation and are never available to the method, which must localize the regions itself; because they are defined as 2D overlays on the posed view, the same annotation projects onto any reconstructed mesh registered to that view, which is what allows the contact metric to be applied identically across methods. \Cref{fig:gt-contact-annotation} shows two examples.
+
+\begin{figure}[!htbp]
+  \centering
+  \includegraphics[width=\textwidth]{figures/experiments_41.pdf}
+  \caption[Ground-truth contact annotation.]{Ground-truth contact annotation, shown for two interactions side by side. \emph{Bicycle Interaction}: the generated human frame (left) and the corresponding manual contact annotation on the posed view (right), with hand and foot contacts. \emph{Table Interaction}: the generated human frame (left) and its manual contact annotation (right), with hip and hand contacts. Guided by the human frame, each participating body part is painted directly onto the scene view in a distinct color following a fixed color-to-part convention, and per-part masks are then extracted by color. This mirrors the agentic contact-estimation stage of the method, with a human performing the overlay in place of the image generation model.}
+  \label{fig:gt-contact-annotation}
+\end{figure}
+
+\FloatBarrier
+\section{Implementation Details}
+\label{sec:implementation-details}
+
+This section collects the concrete models, hyperparameters, and settings used throughout the method. Values deferred from the methodology chapter are specified here.
+
+\paragraph{Foundation models.} The method uses pretrained foundation models for its language, image-generation, and vision-language components, all accessed through their respective APIs. The Scene Interaction Graph and the detailed interaction description are produced by Gemini~3.5~Flash. Human frame generation uses Nano~Banana~2 to inpaint a person into the posed view, and produces $N = 5$ candidate frames, from which Gemini~3.5~Flash selects the frame used downstream. In the agentic contact-estimation stage, the contact overlays are generated by GPT~Image~2, and the contact composites are verified by GPT-5.5, which acts as the vision-language evaluator in the loop. The agentic loop runs for at most $10$ rounds, terminating early when the evaluator accepts a composite and otherwise returning the masks of the final round. Floor-support regions are segmented with SAM 3. The exact prompts used for each foundation-model stage are listed in \cref{app:foundation-model-prompts}.
+
+\paragraph{Human initialization.} The SMPL-X body is initialized with GVHMR, conditioned on the focal length of the posed view and transformed into the scene coordinate frame using the view's extrinsics, as described in \cref{sec:method-pose-init}. The neutral SMPL-X body model is used, with the shape $\boldsymbol{\beta}_0$ taken from GVHMR and held fixed throughout optimization.
+
+\paragraph{Optimization.} The scene-aware optimization minimizes the objective of \cref{eq:optimization-total-loss} with Adam at a learning rate of $10^{-3}$ for $2000$ iterations, of which the first $400$ form the rigid stage (translation and scale only) and the remaining $1600$ the pose stage (translation, orientation, pose, and scale). Gradients are clipped to a maximum norm of $5$. The loss weights are
+\begin{equation*}
+\lambda_{\mathrm{contact}} = 800, \quad
+\lambda_{\mathrm{pen}} = 60, \quad
+\lambda_{\mathrm{pose}} = 250, \quad
+\lambda_{\mathrm{orient}} = 100, \quad
+\lambda_{\mathrm{height}} = 1, \quad
+\lambda_{\mathrm{self}} = 10^{-3},
+\end{equation*}
+and are held constant over the schedule. The self-intersection term is disabled during the rigid stage, since the body pose is frozen there and cannot self-intersect, and is active during the pose stage. The penetration clearance margin is $\delta = 0$.
+
+\paragraph{Rendering for evaluation.} The metrics that operate on rendered views, namely the CLIP score and the vision-language rubric evaluation, use a fixed set of $10$ rendered views per optimized interaction, each at a resolution of $640 \times 640$. The first view is the posed input view itself, cropped to the contact region as used in the agentic contact-estimation stage, so that the interaction is seen from the camera it was synthesized against. The remaining nine views are obtained by rotating the camera around the body on a viewing sphere. Candidate viewpoints are sampled on this sphere and selected so that the interaction is well observed: each selected view shows more than $75\%$ of the body, and, averaged over the selected views, each contact-relevant body part is at least $35\%$ visible. This selection ensures that the body is visible in every render and that the contacting parts, rather than being occluded, are seen across the view set, which is necessary for both the semantic and the vision-language evaluation to reflect the actual interaction.
+
+\paragraph{Contact and penetration sampling.} Each scene-side contact target is represented by $2048$ points sampled uniformly on the projected contact faces. The penetration term samples scene points near the body from the visible scene crop and queries them against the VolumetricSMPL signed-distance field of the posed body. When an interaction specifies bilateral contacts of the same type (for example, a left-hand and a right-hand contact on the same object), the left/right assignment of the two scene-side regions is swapped if doing so reduces the total initial body-to-region distance by at least $2$~cm, which corrects occasional left/right mismatches in the initialization.
+
+\paragraph{Height prior.} The global scale is bounded so that the body's metric height lies within a plausible human range. The height prior targets $h_{\mathrm{tgt}} = 1.83$~m (6~ft~0~in) with tolerance $\sigma_h = 0.051$~m (2~in), and the scale is parameterized so that the resulting height is confined to the range $1.78$--$1.88$~m (5~ft~10~in to 6~ft~2~in). Because body identity is fixed and only a single global scale is optimized, this prior resolves the overall size ambiguity of monocular recovery without altering the body's proportions.
+
+\paragraph{Evaluation models.} The CLIP semantic-consistency metric uses the \texttt{openai/clip-vit-base-patch32} model. The vision-language rubric evaluation uses Gemini~3.5~Flash with temperature $0$ and a fixed random seed, so that the evaluation is deterministic. Both metrics operate on the $10$ rendered views described above. The metrics themselves are defined in \cref{sec:exp-metrics}.
+
+\paragraph{Runtime.} Synthesizing one interaction takes approximately ten minutes end to end on an NVIDIA RTX A6000. This figure includes the foundation-model stages, which are accessed through their APIs and whose latency therefore depends on the service rather than on local hardware, and it varies with the number of rounds the agentic contact loop requires before the evaluator accepts a composite.
+
+\section{Evaluation Metrics}
+\label{sec:exp-metrics}
+
+Evaluating a synthesized human--scene interaction requires measuring several distinct properties, since no single number captures whether an interaction is correct. A body may reach the intended contact region but penetrate the object; it may avoid collision yet float away from the surface it should touch; and it may be geometrically well placed yet fail to express the requested action. The evaluation therefore uses four complementary families of metrics: geometric contact and penetration, which measure physical plausibility; pose diversity, which measures the variety of solutions across the evaluation set; a CLIP-based semantic-consistency score; and a vision-language rubric evaluation. The metrics are reported together, and no single family should be read in isolation, as their limitations are complementary: a low contact distance does not guarantee a correct action, a high CLIP score does not guarantee valid contact, and a favorable rubric score does not guarantee that a subtle penetration is absent.
+
+\subsection{Contact and Penetration}
+\label{sec:exp-metrics-physical}
+
+The physical-plausibility metrics measure two things: whether each intended body part reaches the scene region it should contact, and whether the body avoids penetrating the scene. Both are computed against the reconstructed scene mesh, using the manually annotated ground-truth contact regions of \cref{sec:exp-setup} as the reference for where contact should occur.
+
+\paragraph{Contact distance.} For each contact edge of an interaction, the ground-truth 2D contact mask is projected onto the visible scene mesh to obtain the scene-side reference region, and the corresponding SMPL-X contact region on the synthesized body is compared against it. For each vertex of the body contact region, the Euclidean distance to the nearest point of the reference region is computed, giving a directed, body-to-region nearest-neighbor distance in metres. These per-vertex distances are summarized by their mean over the contact region, which measures how closely the body region as a whole lies to the target. The mean is used because it cannot be made small by a single touching vertex, nor dominated by a single distant one, so it reflects the contact of the whole region rather than of any single point. Per-interaction values are obtained by averaging over the interaction's contact edges, and dataset-level values by averaging over interactions, so that each interaction contributes equally regardless of how many contacts it involves. Lower distances are better; a value near zero indicates that the body region meets its intended scene region.
+
+\paragraph{Penetration depth.} Collision with the scene is measured using the differentiable signed-distance field that VolumetricSMPL~\cite{mihajlovic2025volumetricsmpl} attaches to the posed body. Scene points are sampled from the visible scene surface near the body and queried against this field; a point with a negative signed distance lies inside the body, and its penetration depth is the magnitude of that distance. These depths are summarized by their mean over the penetrating points, which measures the typical severity of collision, reported in metres, with lower being better. Penetration depth complements contact distance: contact distance rewards reaching the surface, while penetration depth penalizes passing through it, and a plausible interaction must satisfy both.
+
+\subsection{Pose Diversity}
+\label{sec:exp-metrics-diversity}
+
+The diversity metrics describe how varied the synthesized bodies are across the evaluation set. They are dataset-level measures and do not score the correctness of any single interaction; their purpose is to check that the method does not collapse to a small set of stereotyped poses. Each optimized interaction is represented by a feature vector formed from its SMPL-X parameters (translation, global orientation, body pose, shape, and scale), and the feature dimensions are standardized across the set before clustering. The interactions are grouped into clusters with $k$-means, and two quantities are reported.
+
+\paragraph{Entropy.} The Shannon entropy of the cluster-occupancy distribution measures how evenly the interactions are spread across clusters. High entropy indicates that the solutions are distributed across many clusters rather than concentrated in a few; low entropy indicates concentration. Higher is better for diversity, up to the maximum set by the number of clusters.
+
+\paragraph{Cluster spread.} The mean distance from each interaction's feature vector to its assigned cluster center measures the average within-cluster variation of the solutions in the standardized feature space. A larger value indicates greater spread among the solutions. This measure is reported alongside the correctness metrics rather than on its own, since variation is only desirable when the varied poses are also physically and semantically valid; diversity that arises from implausible poses is not a benefit.
+
+\subsection{Semantic Consistency (CLIP)}
+\label{sec:exp-metrics-clip}
+
+The CLIP score measures whether the rendered interaction is semantically consistent with the natural-language instruction. Each of the rendered views of an interaction (\cref{sec:implementation-details}) is embedded with the image encoder of CLIP~\cite{radford2021clip}, the instruction is embedded with the text encoder, and the cosine similarity between the two normalized embeddings is computed. Per-interaction scores are obtained by averaging over the interaction's views, and dataset-level scores by averaging over interactions. Higher is better, indicating stronger agreement between the rendered interaction and the instruction.
+
+The CLIP score is a coarse semantic measure. It reflects whether the rendered image appears to contain the requested action and scene content, but it does not reason about 3D geometry, contact, or penetration, and it can reward an image that shows the right object and action while the underlying contact is wrong. It is reported as one signal among several, and is most meaningful when compared across methods under identical rendering and viewpoints, as is the case here.
+
+\subsection{Vision-Language Rubric Evaluation}
+\label{sec:exp-metrics-vlm}
+
+The most faithful way to assess a synthesized interaction is human perceptual judgment, but a controlled user study was beyond the scope of this work. As a scalable proxy, a vision-language model is used as an automated judge. This is an imperfect substitute, and its results are interpreted as an indicative signal rather than ground truth; its limitations are discussed at the end of this subsection.
+
+For each interaction, the rendered views are presented together to the evaluator (Gemini~3.5~Flash; \cref{sec:implementation-details}) with the interaction instruction, and the evaluator assigns four integer scores on a $1$-to-$5$ scale, following the rubric in \cref{app:vlm-rubric} and the evaluation prompt in \cref{app:prompt-interaction-eval}. The four criteria assess complementary aspects of the interaction: \emph{target-object correctness}, whether the person interacts with the object named in the instruction; \emph{human-action correctness}, whether the pose expresses the requested action; \emph{contact and spatial relation}, whether the instruction-relevant body parts plausibly contact the correct object regions; and \emph{physical plausibility}, whether the overall arrangement has plausible support, balance, and collision behavior. The rubric caps the achievable score when characteristic failures are present: hidden or ambiguous contact caps the contact score at $3$; a required body part clearly floating caps both the contact and physical-plausibility scores at $3$; severe target-object penetration caps both at $2$; and penetration of a nearby solid scene element caps physical plausibility at $2$. The four criterion scores and their mean are reported, averaged over the evaluation set; higher is better.
+
+Two limitations of this metric should be kept in mind. First, the criteria are ordinal rubric levels, so averaging them treats the levels as evenly spaced, which is a convenient summary convention rather than an exact numerical statement. Second, a vision-language judge is not a substitute for human perception: it may miss subtle penetration, be influenced by rendering quality, or apply the rubric inconsistently. The evaluation is therefore reported as a proxy alongside the geometric contact and penetration metrics, which are computed directly from 3D geometry and are independent of any vision-language model. The evaluator is distinct from the model used to verify contacts inside the agentic loop during synthesis, so the final evaluation does not reuse the component it is judging. Because the same evaluator, prompt, and rendering protocol are applied identically to the proposed method and to the baseline and ablations, the comparison between them remains even-handed even where the absolute scores should be read with caution.
+
+\section{Baseline and Ablation Settings}
+\label{sec:exp-baseline-ablation}
+
+The evaluation compares the full method against a set of internal ablations, which isolate the contribution of individual components, and against an external baseline, which situates the method relative to prior work. All settings are evaluated on the same 23 interactions, with the same ground-truth contact annotations, metrics, and rendering protocol, so that differences in the reported numbers reflect the method rather than the evaluation.
+
+\subsection{Ablations}
+\label{sec:exp-ablations}
+
+The ablations progressively remove components of the method, isolating the effect of the scene-aware optimization and of the agentic contact loop. Three settings are compared.
+
+\paragraph{GVHMR initialization.} The first setting evaluates the SMPL-X body produced by GVHMR directly, transformed into the scene coordinate frame but without any scene-aware optimization. This measures the quality of the initialization on its own, before contact and penetration are enforced, and establishes the starting point that the optimization must improve upon. Because this body is recovered from the human frame alone and is unaware of the reconstructed scene, it is expected to satisfy contact poorly and to intersect the scene.
+
+\paragraph{Single-shot contact (no agentic verification).} The second setting runs the full method, including scene-aware optimization, but replaces the agentic contact loop with a single generation; it is referred to as the \emph{single-shot} setting throughout. The contact overlays are taken directly from one pass of the overlay model, without any verification or correction, and used as the contact targets. Comparing this setting against the full method isolates the contribution of the agentic verify-and-correct loop specifically: both settings use the same overlay model, optimization, and initialization, and differ only in whether the contacts are verified and corrected before being projected to 3D.
+
+\paragraph{Full method.} The third setting is the complete method, in which the agentic contact loop verifies and corrects the contact regions before they are used, and the scene-aware optimization refines the body against the resulting targets. This is the configuration described in \cref{chap:methodology}.
+
+Read together, the three settings separate the effect of the two main stages: the difference between the GVHMR initialization and the full method reflects the scene-aware optimization as a whole, while the difference between the single-shot setting and the full method reflects the agentic contact loop in isolation.
+
+\subsection{Baseline}
+\label{sec:exp-baseline}
+
+The method is compared against PhySIC~\cite{muralidhar2025physic}, a recent method for physically plausible human--scene interaction and contact from a single image. PhySIC is the closest prior work that produces an SMPL-X body in metric contact with scene geometry from a single view, which makes it the most relevant external point of comparison for the contact quality that this thesis targets.
+
+\paragraph{Task difference.} The comparison is between methods that solve related but not identical problems, and this is stated plainly rather than hidden. PhySIC \emph{reconstructs} a human, the scene, and their contacts from a single image that already contains a person, whereas the proposed method \emph{synthesizes} a human into a scene from a language instruction and a reconstructed mesh. The common ground that makes the comparison meaningful is that both ultimately output an SMPL-X body in metric contact with scene geometry, and both can be judged by how well that body contacts the intended scene regions and avoids penetration. PhySIC is therefore best understood as a representative single-image human--scene reconstruction-and-contact method, included to situate the proposed method against the current state of the art on contact quality, rather than as a directly matched competitor on the same inputs.
+
+\paragraph{Protocol.} To apply PhySIC, it is given the same inpainted human frame that the proposed method generates for each interaction, so that both methods reason about the same depicted interaction. PhySIC ordinarily begins by removing the human from the input image with an inpainting model before reconstructing the scene; this step is skipped and PhySIC is instead given the clean ground-truth scene view directly, which removes a potential source of error and, if anything, works in its favor. From this input PhySIC reconstructs its own scene geometry and places the body against it. Its output is evaluated exactly as produced, without modification.
+
+\paragraph{Metric consistency.} Because PhySIC reconstructs its own scene mesh, its body is expressed relative to geometry that differs from the ScanNet++ mesh used by the proposed method. The contact metric remains comparable because the ground-truth contact regions are annotated in 2D on the shared posed view (\cref{sec:exp-setup}): the same 2D annotation projects onto each method's own geometry through that method's own image-to-scene correspondence, so each method's contact is measured against the same intended contact region, mapped onto the geometry that method actually uses. Penetration is likewise measured for each method against the geometry it produces. For the rendered-view metrics, PhySIC's result is rendered from viewpoints matched as closely as possible to those used for the proposed method; because the two reconstructions differ, this matching is approximate, and the qualitative comparisons should be read as indicative of contact behavior rather than as pixel-aligned renderings.
+
+\section{Agentic Contact Localization}
+\label{sec:exp-agentic-qualitative}
+
+Before turning to the final synthesized interactions, this section examines the agentic contact-estimation stage on its own, since it is the central contribution of the method and the component the ablations single out. The question here is whether the verify-and-correct loop produces contact regions that are better localized than those from a single generation, prior to any 3D optimization. Because contact estimation operates entirely in image space, its output can be inspected directly on the posed view, which makes its behavior visible in a way the final 3D body does not always reveal. This section therefore evaluates the stage entirely in image space: \cref{sec:exp-agentic-metrics} defines the measures used, \cref{sec:exp-agentic-quant} reports them, and \cref{sec:exp-agentic-qual} examines the localized contacts visually. The effect of the loop on the final 3D body is measured separately, in the ablation of \cref{sec:exp-quantitative}.
+
+\subsection{Image-Space Contact Metrics}
+\label{sec:exp-agentic-metrics}
+
+The localized contacts are measured against the manual ground-truth contact masks of \cref{sec:exp-setup}, on the posed view and before any 3D optimization, so that the accuracy of the localization is isolated from the optimization that later consumes it. Two measures are used, containment and centroid distance, each computed per contact edge, averaged over an interaction's edges, and then averaged over interactions, so that each interaction contributes equally regardless of how many contacts it involves.
+
+\paragraph{Containment.} For each contact edge, containment is the fraction of the predicted mask that lies inside the corresponding ground-truth region,
+%
+\begin{equation}
+  \mathrm{Containment} = \frac{|\Omega^{\mathrm{pred}} \cap \Omega^{\mathrm{gt}}|}{|\Omega^{\mathrm{pred}}|},
+  \label{eq:containment}
+\end{equation}
+%
+which measures whether the predicted contact falls on the surface region the interaction requires. Containment is used in place of intersection-over-union because the ground-truth regions are deliberately drawn slightly larger than the true contact, allowing a margin around it. Under that convention the union term of an intersection-over-union score penalizes a prediction that is correct but tightly drawn, conflating localization error with a size difference that was introduced on purpose. Containment is unaffected by the generosity of the reference and therefore measures what is of interest here, namely whether the predicted contact lies on the intended region. Higher is better.
+
+\paragraph{Centroid distance.} Containment records how much of a mask lies inside the reference region but not how far it falls from it. The centroid distance therefore measures the offset between the centroids of the predicted and ground-truth masks, reported in pixels on the posed view. Lower is better. Read together, the two measures describe complementary properties: containment states how fully a predicted contact lies on the intended region, and the centroid distance states how far it is displaced from it.
+
+\paragraph{Missing contacts.} A required contact that is left unmarked has no mask, and therefore no containment and no centroid to compare. Such an edge is counted as a miss and reported as a separate count rather than absorbed into the averages, so that the reported values describe only the contacts a setting actually drew. Omitting a required contact and drawing one imprecisely are distinct failures, and reporting the miss count alongside the localization measures keeps them distinguishable: the measures state how accurately a setting localizes the contacts it marks, and the miss count states how often it marks them at all.
+
+\paragraph{Laterality assignment.} When an interaction requires bilateral contacts of the same type, for example a left-hand and a right-hand contact on the same object, the two predicted masks are compared against the reference under both left/right assignments, and the swapped assignment is used if it reduces the total centroid distance by more than $2\%$ of the image diagonal. Confusing left with right is a distinct failure from mislocalizing a contact, and without this rule a correctly localized but transposed pair would be scored as two gross localization errors. The margin ensures that a swap is applied only when the evidence for it is unambiguous, and the rule is applied identically to both settings, so it cannot favor either; across the evaluation set it is triggered four times for each. This mirrors the left/right correction applied to the 3D contact regions during optimization (\cref{sec:implementation-details}).
+
+\paragraph{Scope.} These measures assess the localization in the image, which is where the loop operates and where its effect can be isolated. They are not a proxy for the accuracy of the resulting 3D contact targets: as \cref{sec:exp-agentic-qual} discusses, the projection to the mesh does not preserve the scale of an image-space error, so a given pixel displacement may correspond to a small or a large 3D error depending on where it falls. The 3D consequence is measured directly in \cref{sec:exp-quantitative}.
+
+\subsection{Quantitative Results}
+\label{sec:exp-agentic-quant}
+
+\Cref{tab:agentic-imagespace} reports the image-space measures for the single-shot generation and for the composite accepted by the agentic loop. The clearest difference is in the contacts that are marked at all: the single-shot generation leaves three required contacts entirely unmarked across the evaluation set, whereas the accepted composites mark all of them. This is the behavior the loop is constructed to produce, since a contact the evaluator finds absent is precisely one it requests in the following round, and it is a failure no amount of accuracy on the remaining contacts can compensate for, as an unmarked contact yields no 3D target at all.
+
+Among the contacts that both settings do mark, the loop improves the localization itself. Mean containment rises from $0.60$ to $0.74$, so a larger share of each predicted mask lies on the surface region the interaction requires, and the mean centroid distance falls from $27.6$ to $19.5$ pixels, so the masks that are drawn sit closer to the intended region. The two measures move together, which is what a genuine improvement in localization should produce: the corrected masks are both more fully on the target and less displaced from it, rather than one being traded against the other.
+
+\begin{table}[!htbp]
+  \centering
+  \caption[Image-space contact-localization accuracy.]{Image-space contact-localization accuracy of the single-shot generation and of the composite accepted by the agentic loop, measured against the manual ground-truth contact masks of \cref{sec:exp-setup} on the posed view, before any 3D optimization. Containment is the fraction of each predicted mask lying inside its ground-truth region; the centroid distance is the offset between the predicted and ground-truth mask centroids, in pixels. A required contact left unmarked has no mask to score and is reported as a miss rather than included in the averages, so the reported values describe only the contacts each setting drew. Arrows indicate whether higher ($\uparrow$) or lower ($\downarrow$) is better; the better value in each column is in bold.}
+  \label{tab:agentic-imagespace}
+  \setlength{\tabcolsep}{12pt}
+  \begin{tabular}{lccc}
+    \toprule
+    Setting & Containment$\uparrow$ & Centroid distance (px)$\downarrow$ & Misses$\downarrow$ \\
+    \midrule
+    Single-shot & 0.60 & 27.6 & 3 \\
+    Agentic     & \textbf{0.74} & \textbf{19.5} & \textbf{0} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Qualitative Results}
+\label{sec:exp-agentic-qual}
+
+\Cref{fig:agentic-qualitative} compares, for several interactions, the generated human frame that drives contact estimation, the contact composite obtained from a single generation, and the composite accepted by the agentic loop. The single-shot composite reflects what the overlay model proposes in one pass, and it exhibits the failure modes the loop is designed to catch: a contact placed on the wrong region of the object, a required contact left unmarked, a spurious mark where no contact occurs, or a footprint of the wrong extent. The accepted composite shows the same interaction after the evaluator has inspected the masks against the generated frame and requested corrections until the contacts match the intended interaction. Across the examples, the corrected contacts are placed on the surface regions actually indicated by the interaction, on the rail a hand grips rather than beside it, on the surface a foot rests on rather than an adjacent one, and cover an extent consistent with the contacting body part.
+
+These image-space corrections matter because the composites are projected directly to the scene mesh as the optimization targets. A contact that is mislocalized in the composite becomes a mislocalized 3D target, which the optimization will then faithfully satisfy, drawing the body to the wrong place. The loop therefore does not merely improve the appearance of the annotation; it changes the target the body is optimized toward.
+
+The severity of such an error in 3D, however, is not determined by its size in the image. The projection of a mask onto the mesh follows the scene geometry behind it, so an error that is small in pixels may be small or large in the scene depending on where it falls. Where the contacted surface is surrounded by geometry at a similar depth, a displaced mask projects to a nearby point on the same structure, and the resulting target is merely imprecise. Where the surface stands in front of distant geometry, the same displacement projects to an entirely different structure. The treadmill running example illustrates this: the side rails the hands grip stand well in front of the wall behind them, so a mask that misses a rail by a few pixels does not project a few centimetres away, but onto the wall metres beyond it. The contact target is then not an imprecise version of the intended one but a target on the wrong scene structure, which the optimization will nonetheless satisfy. This is why the pixel differences reported in \cref{sec:exp-agentic-quant} are consequential rather than cosmetic, and why their effect on the final body, measured in \cref{sec:exp-quantitative}, is not proportional to their size in the image.
+
+\begingroup
+% --- Generic row helper for the agentic contact figure ---
+% Fixed display box per cell so all three images in a row align.
+\newlength{\accellw}\setlength{\accellw}{0.31\textwidth}%
+\newlength{\accellh}\setlength{\accellh}{0.13\textheight}%
+% \acrow{basename}: expects figures/agentic_contact/<basename>_human.jpg,
+% _singleshot.jpg, and _agentic.jpg
+\newcommand{\acrow}[1]{%
+  \includegraphics[width=\accellw,height=\accellh,keepaspectratio]{figures/agentic_contact/#1_human.jpg} &
+  \includegraphics[width=\accellw,height=\accellh,keepaspectratio]{figures/agentic_contact/#1_singleshot.jpg} &
+  \includegraphics[width=\accellw,height=\accellh,keepaspectratio]{figures/agentic_contact/#1_agentic.jpg} \\[3pt]}
+\newcommand{\acheader}{%
+  {\small\bfseries Human frame} &
+  {\small\bfseries Single-shot contact} &
+  {\small\bfseries Agentic contact} \\[4pt]}
+
+\begin{figure}[p]
+  \centering
+  \setlength{\tabcolsep}{7pt}%
+  \renewcommand{\arraystretch}{0.6}%
+  \begin{tabular}{ccc}
+    \acheader
+    \acrow{table}
+    \acrow{shower}
+    \acrow{bicycle}
+    \acrow{drawer}
+    \acrow{cupboard}
+  \end{tabular}
+  \caption[Agentic contact localization.]{Agentic contact localization, shown in image space before 3D optimization. Each row is one interaction. Left: the generated human frame that drives contact estimation. Middle: the contact composite from a single generation, which may place a contact on the wrong object region, omit a required contact, add a spurious one, or use a footprint of the wrong extent. Right: the composite accepted by the agentic verify-and-correct loop, in which the evaluator has corrected the masks against the generated frame until the contacts match the intended interaction. Because these composites are projected directly to the scene mesh as optimization targets, correcting them in image space is what corrects the 3D contact the body is optimized toward.}
+  \label{fig:agentic-qualitative}
+\end{figure}
+
+\begin{figure}[p]
+  \ContinuedFloat
+  \centering
+  \setlength{\tabcolsep}{7pt}%
+  \renewcommand{\arraystretch}{0.6}%
+  \begin{tabular}{ccc}
+    \acheader
+    \acrow{pullup}
+    \acrow{bathtub}
+    \acrow{ladder}
+    \acrow{blind}
+  \end{tabular}
+  \caption[]{Agentic contact localization (continued).}
+\end{figure}
+\endgroup
+
+\FloatBarrier
+\section{Quantitative Results}
+\label{sec:exp-quantitative}
+
+\Cref{tab:exp-quantitative} reports the metrics of \cref{sec:exp-metrics} for the full method, the two ablations, and the PhySIC baseline, averaged over the 23 interactions. The metrics are grouped into physical plausibility, semantics, vision-language evaluation, and diversity. The discussion below follows the two comparisons the settings were designed to isolate: the effect of the scene-aware optimization, and the effect of the agentic contact loop.
+
+\begin{table}[!htbp]
+  \centering
+  \caption[Quantitative results.]{Quantitative results over the 23 evaluation interactions. Arrows indicate whether higher ($\uparrow$) or lower ($\downarrow$) is better; the best value in each column is in bold. Contact and penetration are mean distances in metres; CLIP is cosine similarity; the vision-language (VLM) scores are on the $1$--$5$ rubric of \cref{sec:exp-metrics-vlm}, reported per criterion and as their mean. Diversity is reported for reference and is not a quality measure.}
+  \label{tab:exp-quantitative}
+  \small
+  \setlength{\tabcolsep}{4pt}
+  \resizebox{\textwidth}{!}{%
+  \begin{tabular}{@{}l cc c ccccc cc@{}}
+    \toprule
+    & \multicolumn{2}{c}{Physical plausibility} & Semantics & \multicolumn{5}{c}{VLM evaluation ($1$--$5$)} & \multicolumn{2}{c}{Diversity} \\
+    \cmidrule(lr){2-3} \cmidrule(lr){4-4} \cmidrule(lr){5-9} \cmidrule(lr){10-11}
+    Method
+      & Contact$\downarrow$ & Pen.$\downarrow$
+      & CLIP$\uparrow$
+      & Obj.$\uparrow$ & Act.$\uparrow$ & Cont.$\uparrow$ & Phys.$\uparrow$ & Mean$\uparrow$
+      & Ent. & Spr. \\
+    \midrule
+    \multicolumn{11}{@{}l}{\emph{Baseline}} \\
+    \quad PhySIC~\cite{muralidhar2025physic}
+      & 0.242 & 0.011
+      & 0.259
+      & 4.87 & 4.04 & 3.48 & 3.78 & 4.04
+      & 2.59 & 2.57 \\
+    \midrule
+    \multicolumn{11}{@{}l}{\emph{Ours}} \\
+    \quad GVHMR init
+      & 0.163 & 0.017
+      & 0.270
+      & \textbf{5.00} & 3.65 & 2.87 & 3.48 & 3.75
+      & 2.57 & 2.65 \\
+    \quad Single-shot
+      & 0.070 & \textbf{0.005}
+      & 0.271
+      & \textbf{5.00} & \textbf{4.39} & 3.83 & 3.87 & 4.27
+      & 2.55 & 2.58 \\
+    \quad Full method
+      & \textbf{0.039} & \textbf{0.005}
+      & \textbf{0.272}
+      & \textbf{5.00} & \textbf{4.39} & \textbf{4.00} & \textbf{4.04} & \textbf{4.36}
+      & 2.55 & 2.68 \\
+    \bottomrule
+  \end{tabular}
+  }
+\end{table}
+
+\paragraph{Effect of scene-aware optimization.} Comparing the GVHMR initialization with the full method isolates the effect of the scene-aware optimization as a whole. The initialization, recovered from the human frame without knowledge of the scene, attains a mean contact distance of $0.163$~m and the highest mean penetration of any setting at $0.017$~m, confirming that a body which looks correct in the image is not, on its own, in metric contact with the scene and frequently intersects it. The optimization reduces the mean contact distance to $0.039$~m and the mean penetration to $0.005$~m, and the vision-language contact and physical-plausibility scores rise correspondingly, the contact score from $2.87$ to $4.00$ and the plausibility score from $3.48$ to $4.04$. This is the expected behavior: the optimization exists precisely to pull the initialized body into contact with the scene while resolving penetration, and the metrics reflect both effects.
+
+\paragraph{Effect of the agentic contact loop.} The comparison that isolates the central contribution is between the single-shot setting and the full method, which are identical except for whether the contact regions are verified and corrected before being used. Adding the agentic loop reduces the mean contact distance from $0.070$~m to $0.039$~m, a reduction of roughly $45\%$, and raises the vision-language contact score from $3.83$ to $4.00$. The penetration metrics are essentially unchanged between the two, which is what one would expect: the loop corrects \emph{where} contact is localized, not whether the body penetrates the scene, and the two settings share the same penetration term. The improvement is therefore concentrated on exactly the axis the loop is designed to affect, the accuracy of the scene-side contact, which supports the claim that verifying and correcting the contacts, rather than accepting a single generation, is what sharpens the final contact.
+
+\paragraph{Comparison with PhySIC.} The full method attains a substantially lower mean contact distance than PhySIC, $0.039$~m against $0.242$~m, and lower mean penetration, $0.005$~m against $0.011$~m, despite PhySIC having been given the clean ground-truth scene image as input (\cref{sec:exp-baseline}). The vision-language scores show the same ordering, with the full method ahead on the contact and action criteria in particular. The gap is widest on contact distance, which is the quantity most directly tied to the fine-grained, per-body-part contact localization this thesis targets: PhySIC produces a plausible body in the scene, but its contacts are less precisely placed on the intended surface regions, whereas the proposed method localizes and verifies those regions explicitly before fitting the body to them.
+
+\paragraph{Semantics and diversity.} The CLIP scores are close across all settings, ranging only from $0.259$ to $0.272$, with the full method highest and PhySIC lowest. The narrow spread is consistent with the role of CLIP discussed in \cref{sec:exp-metrics-clip}: it measures whether the rendered interaction broadly matches the instruction, which all settings achieve, and it is not sensitive to the fine-grained contact differences that separate them. The vision-language target-object score is likewise saturated at or near the maximum for every setting, indicating that all of them place the person on the object named in the instruction; the criteria that discriminate between settings are contact and physical plausibility, not object identity. The diversity metrics are similar across settings, which indicates that the improvements in contact and plausibility are not obtained by collapsing to a narrow set of poses: the method preserves the variation present in the initialization rather than sacrificing it for contact accuracy.
+
+
+\FloatBarrier
+\section{Qualitative Results}
+\label{sec:exp-qualitative}
+
+This section presents the synthesized interactions visually through separate ablation and baseline comparisons. Because correct contact is a three-dimensional property that a single viewpoint can hide, every setting is shown from two views chosen to reveal the contacting body parts. \Cref{fig:exp-qualitative-ablation} compares GVHMR init, Single-shot, and Full method on nine interactions selected to span the range of contact types, from support interactions to fine-grained functional contacts on ladders, bars, handles, and rails. \Cref{fig:exp-qualitative-baseline} compares PhySIC and Full method on the same interactions. In both galleries, the leftmost cell gives the generated human frame together with a compact interaction number and description; the complete instructions are listed in \cref{tab:exp-interactions}. The remaining fourteen interactions are shown in \cref{app:qualitative-gallery}.
+
+Across the galleries, the full method places the contacting body parts on the surface regions the interaction requires. The effect is clearest for the fine-grained interactions, where the hands and feet must meet a specific rung, bar, handle, or rail rather than the object as a whole, and where a small placement error is immediately apparent.
+
+The ablation comparison exposes the contribution of both refinement stages. GVHMR init recovers the body from the generated frame without scene knowledge, so it can appear plausible from the input viewpoint while floating away from the required surface or penetrating the reconstructed geometry in another view. Scene-aware refinement corrects that placement. The comparison between Single-shot and Full method is subtler because both settings run the same optimization and often reach similar poses. Where they differ is exactly where the single generation mislocalized a contact: the single-shot body is then optimized toward the wrong region and settles onto the wrong part of the object, while the full method, having corrected the contact beforehand, meets the intended region.
+
+Compared with PhySIC, the proposed method localizes contact more precisely. PhySIC generally recovers a plausible overall arrangement, but its contacting parts are less tightly placed on the intended surfaces, and for the fine-grained interactions they are frequently offset from the required region. As noted in \cref{sec:exp-baseline}, PhySIC reconstructs its own scene geometry and is rendered from an approximately matched viewpoint, so these comparisons are indicative of contact behavior rather than pixel-aligned; the visible difference in contact precision is consistent with the gap in mean contact distance reported in \cref{sec:exp-quantitative}.
+
+\begin{landscape}
+\begingroup
+  \setlength{\qualresultwidth}{0.13\linewidth}%
+  \setlength{\qualresultheight}{0.14\linewidth}%
+  \setlength{\qualframeheight}{0.105\linewidth}%
+  \setlength{\qualrowheight}{0.17\linewidth}%
+
+  \begin{figure}[p]
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \small
+    \begin{tabular}{@{}p{0.14\linewidth} cc cc cc@{}}
+      \qualablationheader
+      \qualablationrow{curtain}{6}{Opening a curtain}
+      \qualablationrow{lifttable}{10}{Lifting the wooden table}
+      \bottomrule
+    \end{tabular}
+    \caption[Qualitative ablation comparison on nine interactions.]{Qualitative ablation comparison on nine interactions. The leftmost cell shows the generated human frame with a compact interaction identifier; the remaining columns show two views each for GVHMR init, Single-shot, and Full method. Complete interaction instructions are given in \cref{tab:exp-interactions}.}
+    \label{fig:exp-qualitative-ablation}
+  \end{figure}
+
+  \begin{figure}[p]
+    \ContinuedFloat
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \small
+    \begin{tabular}{@{}p{0.14\linewidth} cc cc cc@{}}
+      \qualablationheader
+      \qualablationrow{bicyclesit}{11}{Sitting on the bicycle}
+      \qualablationrow{staircasebed}{14}{Climbing onto the top bed}
+      \bottomrule
+    \end{tabular}
+    \caption[]{Qualitative ablation comparison on nine interactions (continued).}
+  \end{figure}
+
+  \begin{figure}[p]
+    \ContinuedFloat
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \small
+    \begin{tabular}{@{}p{0.14\linewidth} cc cc cc@{}}
+      \qualablationheader
+      \qualablationrow{bicyclestand}{17}{Removing the bicycle from its stand}
+      \qualablationrow{stepladder}{19}{Climbing the step ladder}
+      \bottomrule
+    \end{tabular}
+    \caption[]{Qualitative ablation comparison on nine interactions (continued).}
+  \end{figure}
+
+  \begin{figure}[p]
+    \ContinuedFloat
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \small
+    \begin{tabular}{@{}p{0.14\linewidth} cc cc cc@{}}
+      \qualablationheader
+      \qualablationrow{pullup}{20}{Hanging from the pull-up bar}
+      \qualablationrow{bathtub}{21}{Stepping over the bathtub wall}
+      \bottomrule
+    \end{tabular}
+    \caption[]{Qualitative ablation comparison on nine interactions (continued).}
+  \end{figure}
+
+  \begin{figure}[p]
+    \ContinuedFloat
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \small
+    \begin{tabular}{@{}p{0.14\linewidth} cc cc cc@{}}
+      \qualablationheader
+      \qualablationrow{ladderdown}{23}{Stepping down from the ladder}
+      \bottomrule
+    \end{tabular}
+    \caption[]{Qualitative ablation comparison on nine interactions (continued).}
+  \end{figure}
+
+  \clearpage
+  \setlength{\qualresultwidth}{0.20\linewidth}%
+  \setlength{\qualresultheight}{0.19\linewidth}%
+  \setlength{\qualframeheight}{0.14\linewidth}%
+  \setlength{\qualrowheight}{0.22\linewidth}%
+
+  \begin{figure}[p]
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \small
+    \begin{tabular}{@{}p{0.14\linewidth} cc cc@{}}
+      \qualbaselineheader
+      \qualbaselinerow{curtain}{6}{Opening a curtain}
+      \qualbaselinerow{lifttable}{10}{Lifting the wooden table}
+      \bottomrule
+    \end{tabular}
+    \caption[Qualitative baseline comparison on nine interactions.]{Qualitative baseline comparison on nine interactions. The leftmost cell shows the generated human frame with a compact interaction identifier; the remaining columns show two views each for PhySIC and Full method. Complete interaction instructions are given in \cref{tab:exp-interactions}.}
+    \label{fig:exp-qualitative-baseline}
+  \end{figure}
+
+  \begin{figure}[p]
+    \ContinuedFloat
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \small
+    \begin{tabular}{@{}p{0.14\linewidth} cc cc@{}}
+      \qualbaselineheader
+      \qualbaselinerow{bicyclesit}{11}{Sitting on the bicycle}
+      \qualbaselinerow{staircasebed}{14}{Climbing onto the top bed}
+      \bottomrule
+    \end{tabular}
+    \caption[]{Qualitative baseline comparison on nine interactions (continued).}
+  \end{figure}
+
+  \begin{figure}[p]
+    \ContinuedFloat
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \small
+    \begin{tabular}{@{}p{0.14\linewidth} cc cc@{}}
+      \qualbaselineheader
+      \qualbaselinerow{bicyclestand}{17}{Removing the bicycle from its stand}
+      \qualbaselinerow{stepladder}{19}{Climbing the step ladder}
+      \bottomrule
+    \end{tabular}
+    \caption[]{Qualitative baseline comparison on nine interactions (continued).}
+  \end{figure}
+
+  \begin{figure}[p]
+    \ContinuedFloat
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \small
+    \begin{tabular}{@{}p{0.14\linewidth} cc cc@{}}
+      \qualbaselineheader
+      \qualbaselinerow{pullup}{20}{Hanging from the pull-up bar}
+      \qualbaselinerow{bathtub}{21}{Stepping over the bathtub wall}
+      \bottomrule
+    \end{tabular}
+    \caption[]{Qualitative baseline comparison on nine interactions (continued).}
+  \end{figure}
+
+  \begin{figure}[p]
+    \ContinuedFloat
+    \centering
+    \setlength{\tabcolsep}{3pt}
+    \small
+    \begin{tabular}{@{}p{0.14\linewidth} cc cc@{}}
+      \qualbaselineheader
+      \qualbaselinerow{ladderdown}{23}{Stepping down from the ladder}
+      \bottomrule
+    \end{tabular}
+    \caption[]{Qualitative baseline comparison on nine interactions (continued).}
+  \end{figure}
+\endgroup
+\end{landscape}
+\clearpage
+
+\section{Analysis and Failure Cases}
+\label{sec:exp-failure}
+
+This section interprets the results as a whole and then examines the cases in which the method fails, since these delineate the boundary of what the approach can currently achieve.
+
+\subsection{What the Results Show}
+\label{sec:exp-analysis}
+
+Taken together, the three settings and the baseline separate the contributions of the method's stages. The GVHMR initialization, a body fitted to the human frame without knowledge of the scene, attains both the worst contact distance and the highest penetration of any setting, which shows that image-plausible pose recovery alone does not place a body in metric contact with the scene. Grounding that body on the reconstructed geometry through the localized contacts reduces both quantities, and the comparison with PhySIC points the same way: explicitly grounded contacts yield more precisely placed body parts than a method that recovers contact implicitly. Among the grounded variants, the ablation isolates the agentic contact loop: adding it reduces the mean contact distance from $0.070$~m to $0.039$~m while leaving penetration essentially unchanged, so its effect falls specifically on the accuracy of the contact rather than on any other property. The qualitative studies show the same behavior in image space and in the final renders, with the localized contacts placed on the correct surface regions and the corrected contacts meeting the regions the interaction requires. These findings are returned to, and stated as answers to the research questions of \cref{sec:intro-rq}, in \cref{chap:conclusion}.
+
+\subsection{Failure Cases}
+\label{sec:exp-failure-cases}
+
+The method's failures fall into two identifiable causes, shown in \cref{fig:exp-failure}.
+
+\paragraph{Contact localized on the wrong part of the object.} Because contact is localized in image space, the procedure depends on the contacted region being visually identifiable, and on objects with many similar, repeated parts this can fail. The clearest example is a ladder: the interaction contacts a particular rung, but the localized contact is sometimes placed on an adjacent rung instead, since the rungs are nearly identical in appearance and the correct one is under-determined by the image. Notably, this does not always produce a visibly broken result. When the body is then optimized against the misplaced rung, it settles into a plausible interaction with that rung, so the final pose looks natural even though the contact is not on the rung the instruction implies. The failure is therefore one of contact fidelity rather than of overall plausibility, and it is not always apparent from the rendered result alone.
+
+\paragraph{Initialization far from the solution.} The optimization is deliberately anchored to the GVHMR initialization and makes only local adjustments, which is what keeps the refined pose natural. When the initialization is far from a correct configuration, the pose prior prevents the optimization from moving far enough to reach the solution. This occurs for poses that monocular recovery estimates poorly: for the interaction of a person lying on a sofa, the initialization recovers a pose that does not match the lying configuration, and because the optimization stays close to that initialization, it cannot recover the correct lying pose and the final body remains wrong. In such cases the limitation lies in the initialization rather than in the contact estimation or the optimization objective.
+
+These two cases mark the current boundary of the method and indicate the most promising directions for future work, which are discussed in \cref{chap:conclusion}.
+
+\begin{figure}[!htbp]
+  \centering
+  \includegraphics[width=\textwidth]{figures/experiments_44.pdf} 
+  \caption[Failure cases in contact localization and initialization.]{The two failure cases are shown side by side. \emph{Ladder Interaction}: the generated human frame (left) and the estimated contacts (right). Because the rungs are nearly identical in appearance, one foot contact is localized on the wrong rung. \emph{Sofa Interaction}: the generated human frame depicting a person lying on the sofa (left) and the GVHMR initialization (right). Monocular recovery produces a pose that does not match the lying configuration.}
+  \label{fig:exp-failure}
+\end{figure}

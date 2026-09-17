@@ -1,0 +1,52 @@
+% !TeX program = lualatex
+% !TeX root = main.tex
+
+\documentclass[11pt,a4paper,oneside]{report}
+
+\input{metadata}
+\usepackage{styles/thesis}
+\input{tables/qualitative_gallery}
+
+\begin{document}
+
+\pagenumbering{Roman}
+\hypersetup{pageanchor=false}
+\thesistitlepage
+\cleardoublepage
+\hypersetup{pageanchor=true}
+\setcounter{page}{1}
+
+\input{frontmatter/declaration}
+\input{frontmatter/abstract}
+\input{frontmatter/acknowledgments}
+
+\tableofcontents
+
+\cleardoublepage
+\phantomsection
+\addcontentsline{toc}{chapter}{List of Figures}
+\listoffigures
+
+\cleardoublepage
+\phantomsection
+\addcontentsline{toc}{chapter}{List of Tables}
+\listoftables
+
+\input{frontmatter/abbreviations}
+\cleardoublepage
+
+\pagenumbering{arabic}
+
+\input{chapters/01_introduction}
+\input{chapters/02_related_work}
+\input{chapters/03_methodology}
+\input{chapters/04_experiments}
+\input{chapters/05_conclusion}
+
+\bibliographystyle{unsrtnat}
+\bibliography{references/references}
+
+\appendix
+\input{backmatter/appendix_a}
+
+\end{document}
