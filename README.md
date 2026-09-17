@@ -13,8 +13,6 @@ Given a natural-language instruction, one calibrated RGB view, and a reconstruct
 ![Thesis](https://img.shields.io/badge/Masters_Thesis-TUM-3070B3)
 ![Python](https://img.shields.io/badge/Python-PyTorch-3776AB?logo=python&logoColor=white)
 
-[Thesis PDF](https://github.com/mumerabbasi/4DHOI/blob/thesis/Thesis.pdf) · [Evaluation protocol](06_Evaluate_Interaction/EVALUATION_METRICS.md) · [Benchmark interactions](01_Generate_SIG/INTERACTIONS.md) · [Raw aggregate results](06_Evaluate_Interaction/ablation_metrics.csv)
-
 </div>
 
 The central idea is to treat **scene-side contact** as the bridge between foundation-model knowledge and metric 3D geometry. Instead of trusting a generated interaction image as the final answer, the system asks an image model to mark the precise object-surface region for each required body-part contact. A vision-language model verifies those regions and requests corrections before they are projected onto the scene mesh and used to optimize the body. Floor-support contacts follow a separate SAM 3 segmentation branch.
