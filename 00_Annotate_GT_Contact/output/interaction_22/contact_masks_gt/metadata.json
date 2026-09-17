@@ -1,0 +1,65 @@
+{
+  "palette": [
+    {
+      "part": "left hand",
+      "label": "Left Hand",
+      "hex": "#0000FF",
+      "rgb": [
+        0,
+        0,
+        255
+      ],
+      "color_name": "pure blue"
+    },
+    {
+      "part": "right hand",
+      "label": "Right Hand",
+      "hex": "#00FF00",
+      "rgb": [
+        0,
+        255,
+        0
+      ],
+      "color_name": "pure green"
+    },
+    {
+      "part": "right foot",
+      "label": "Right Foot",
+      "hex": "#00FFFF",
+      "rgb": [
+        0,
+        255,
+        255
+      ],
+      "color_name": "pure cyan"
+    }
+  ],
+  "color_max_distance": 90.0,
+  "min_component_area": 0,
+  "keep_components": 1,
+  "source": "gt_contact_overlay",
+  "source_overlay_path": "/my_workspace/4DHHOI/4DHSI/00_Annotate_GT_Contact/output/interaction_22/contact_overlay_gt.png",
+  "source_canvas_path": "/my_workspace/4DHHOI/4DHSI/00_Annotate_GT_Contact/output/interaction_22/assets/target_scene_crop.png",
+  "source_contact_spec_path": "/my_workspace/4DHHOI/4DHSI/00_Annotate_GT_Contact/output/interaction_22/contact_spec.json",
+  "human_parts": [
+    "left hand",
+    "right hand",
+    "right foot"
+  ],
+  "source_sig_path": "/my_workspace/4DHHOI/4DHSI/01_Generate_SIG/output/interaction_22/sig.json",
+  "floor_parts": [
+    "left foot"
+  ],
+  "floor_mask_path": "/my_workspace/4DHHOI/4DHSI/00_Annotate_GT_Contact/output/interaction_22/floor_mask_crop.png",
+  "floor_sam3_prompt": "floor",
+  "floor_sam3_score": 0.9801530241966248,
+  "floor_crop_xyxy": [
+    469,
+    110,
+    905,
+    1046
+  ],
+  "floor_source_scene_image_path": "/my_workspace/4DHHOI/4DHSI/01_Generate_SIG/output/interaction_22/scene_image.png",
+  "floor_source_input_scene_json_path": "/my_workspace/4DHHOI/4DHSI/01_Generate_SIG/input_prompts/interaction_22/input_scene.json",
+  "floor_source_transforms_path": "/my_workspace/4DHHOI/Scannet++/data/5166da6131/dslr/nerfstudio/transforms_undistorted.json"
+}

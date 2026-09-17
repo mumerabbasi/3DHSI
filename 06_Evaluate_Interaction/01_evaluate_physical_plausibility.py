@@ -99,70 +99,28 @@ class ExternalHumanEvaluationInput:
     smplx_model: SMPLXModelSpec
 
 
-@dataclass(frozen=True)
-class EvaluationInputs:
-    input_scene_json: Path
-    human_pose_root: Path
-    sig_json: Path
-    smpl_seg_json: Path
-    contact_masks_dir: Path
-    contact_canvas_path: Path
-    contact_spec: Path
-    human_mesh: Path
-    optimized_params: Path
-    scannet_root: Path
-    mesh_in_world: bool = False
-    initial_pose: bool = False
-    verify_mesh: bool = False
-
-
-@dataclass(frozen=True)
-class EvaluationSettings:
-    smpl_param_key: str = "smpl_params_incam"
-    seed: int = 0
-    non_collision_surface_samples: int = 700000
-    contact_region_expand_rings: int = 0
-    contact_projection_depth_jump_m: float = 0.05
-    contact_projection_nearby_depth_m: float = 0.05
-    contact_projection_min_component_pixels: int = 16
-    contact_projection_max_component_gap_px: float = 48.0
-    mesh_reconstruction_tolerance_m: float = 1e-4
-
-
-def evaluation_inputs(
-    interaction_name: str, output_mode: str = "output", **overrides: Any
-) -> EvaluationInputs:
-    paths = build_default_paths(interaction_name, output_mode)
-    fields = (
-        "input_scene_json",
-        "human_pose_root",
-        "sig_json",
-        "smpl_seg_json",
-        "contact_masks_dir",
-        "contact_canvas_path",
-        "contact_spec",
-        "optimized_params",
-    )
-    inputs = {name: paths[name] for name in fields}
-    inputs.update(
-        human_mesh=paths["human_mesh_camera"],
-        scannet_root=resolve_scannet_root(None),
-        initial_pose=output_mode == "output_init",
-        mesh_in_world=output_mode == "output_init",
-    )
-    inputs.update(overrides)
-    return EvaluationInputs(**inputs)
+@dataclass
+class InteractionNode:
+    raw_node: str
+    entity_name: str
+    part_name: str
+    is_human: bool
 
 
 @dataclass
-class ContactConstraint:
+class DynamicInteractionEdge:
+    node_a: InteractionNode
+    node_b: InteractionNode
+    moving_node: InteractionNode
+    fixed_node: InteractionNode
     moving_part_name: str
     moving_segment_id: str
-    scene_element: str
+    moving_segment_name: str
     moving_vertex_ids: np.ndarray
     fixed_points: np.ndarray
-    fixed_face_ids: np.ndarray
-    fixed_vertex_ids: np.ndarray
+    reduction: str
+    fixed_face_ids: np.ndarray | None = None
+    fixed_vertex_ids: np.ndarray | None = None
     projected_mask: np.ndarray | None = None
 
 
@@ -173,9 +131,17 @@ class SmplxSegmentCatalog:
     contact_segment_ids: list[str]
 
     def get_indices(self, segment_id: str) -> np.ndarray:
-        return self.segments[segment_id]
+        indices = self.segments.get(segment_id)
+        if indices is None:
+            raise KeyError(f"Unknown SMPL-X segment id '{segment_id}'.")
+        return indices
 
-    def get_contact_segment_id(self, sig_part_name: str) -> str:
+    def get_display_name(self, segment_id: str) -> str:
+        if segment_id not in self.segments:
+            raise KeyError(f"Unknown SMPL-X segment id '{segment_id}'.")
+        return segment_id.replace("_", " ")
+
+    def get_contact_or_body_segment_id(self, sig_part_name: str) -> str:
         body_segment_id = slugify_segment_name(sig_part_name)
         segment_id = CONTACT_SEGMENT_BY_BODY_SEGMENT.get(body_segment_id)
         if segment_id is None or segment_id not in self.contact_segment_ids:
@@ -210,8 +176,18 @@ def normalize_label(text: str) -> str:
     )
 
 
-def normalize_scene_element(text: str) -> str:
-    return "target_object" if text in {"target_object_1", "target_object_2"} else text
+def normalize_scene_element(text: str, target_labels: set[str] | None = None) -> str:
+    raw = str(text).strip().lower()
+    normalized = normalize_label(text)
+    labels = target_labels or set()
+    if (
+        raw == "target_object"
+        or raw.startswith("target_object_")
+        or normalized in {"target object", "object", "target object 1", "target object 2"}
+        or normalized in labels
+    ):
+        return "target_object"
+    return normalized
 
 
 def slugify_segment_name(text: str) -> str:
@@ -219,7 +195,20 @@ def slugify_segment_name(text: str) -> str:
 
 
 def resolve_sig_target_label(sig_payload: dict[str, Any]) -> str:
-    return sig_payload["target_objects"][0]["label"]
+    target_objects = sig_payload.get("target_objects")
+    if isinstance(target_objects, list) and target_objects:
+        first_target = target_objects[0]
+        if isinstance(first_target, dict):
+            label = str(first_target.get("label", "")).strip()
+            if label:
+                return label
+    target_object = sig_payload.get("target_object", {})
+    if not isinstance(target_object, dict):
+        raise ValueError("SIG must contain target_objects.")
+    label = str(target_object.get("label", "")).strip()
+    if label:
+        return label
+    raise ValueError("SIG target_object.label must be non-empty.")
 
 
 def build_default_paths(
@@ -228,7 +217,8 @@ def build_default_paths(
 ) -> dict[str, Path]:
     if output_mode not in OUTPUT_MODES:
         raise ValueError(
-            f"Unsupported output_mode '{output_mode}'. Expected one of {OUTPUT_MODES}."
+            f"Unsupported output_mode '{output_mode}'. "
+            f"Expected one of {OUTPUT_MODES}."
         )
     optimization_output_mode = "output" if output_mode == "output_init" else output_mode
     human_mesh_camera = (
@@ -285,7 +275,9 @@ def build_default_paths(
         / "05_Optimize_Static_Scene"
         / optimization_output_mode
         / interaction_name
-        / "optimized_params.pt",
+        / "debug"
+        / "params"
+        / "optimized_frame_0000.pt",
         "output_root": SCRIPT_DIR
         / output_mode
         / interaction_name
@@ -672,14 +664,19 @@ def load_smpl_segment_catalog(seg_path: Path) -> SmplxSegmentCatalog:
 
 
 def iter_sig_interactions(sig_payload: dict[str, Any]) -> list[dict[str, Any]]:
-    return [
-        {
-            **edge,
-            "body_part": edge["human_part"],
-            "scene_element": normalize_scene_element(edge["scene_element"]),
-        }
-        for edge in sig_payload["interaction_edges"]
-    ]
+    interactions = sig_payload.get("interaction_edges", [])
+    if not isinstance(interactions, list):
+        raise ValueError("SIG must contain a list field named 'interaction_edges'.")
+    edges: list[dict[str, Any]] = []
+    for interaction in interactions:
+        if not isinstance(interaction, dict):
+            continue
+        body_part = normalize_label(str(interaction.get("human_part", "")))
+        scene_element = normalize_scene_element(str(interaction.get("scene_element", "")))
+        if not body_part or not scene_element:
+            continue
+        edges.append({**interaction, "body_part": body_part, "scene_element": scene_element})
+    return edges
 
 
 def load_contact_mask_for_part(
@@ -988,13 +985,25 @@ def sample_face_set_surface_points(
     return samples.astype(np.float32)
 
 
+def _get_reduction(nodes: tuple[InteractionNode, InteractionNode]) -> str:
+    for node in nodes:
+        if node.is_human and node.part_name.split(" ")[-1] in (
+            "hand",
+            "leg",
+            "foot",
+            "hips",
+        ):
+            return "mean"
+    return "min"
+
+
 def _edge_centroid(points: np.ndarray) -> np.ndarray:
     return points.astype(np.float32).mean(axis=0)
 
 
 def _swap_fixed_region_assignment(
-    edge_a: ContactConstraint,
-    edge_b: ContactConstraint,
+    edge_a: DynamicInteractionEdge,
+    edge_b: DynamicInteractionEdge,
 ) -> None:
     edge_a.fixed_points, edge_b.fixed_points = edge_b.fixed_points, edge_a.fixed_points
     edge_a.fixed_face_ids, edge_b.fixed_face_ids = (
@@ -1008,20 +1017,20 @@ def _swap_fixed_region_assignment(
 
 
 def spatially_disambiguate_bilateral_interaction_edges(
-    interaction_edges: list[ContactConstraint],
+    interaction_edges: list[DynamicInteractionEdge],
     init_verts_camera: np.ndarray,
 ) -> None:
     if len(interaction_edges) < 2:
         return
 
-    edge_by_key: dict[tuple[str, str, str], ContactConstraint] = {}
+    edge_by_key: dict[tuple[str, str, str], DynamicInteractionEdge] = {}
     for edge in interaction_edges:
         part_tokens = normalize_label(edge.moving_part_name).split()
         if len(part_tokens) < 2 or part_tokens[0] not in {"left", "right"}:
             continue
         side = part_tokens[0]
         base_part = " ".join(part_tokens[1:])
-        group_key = (normalize_label(edge.scene_element), base_part, side)
+        group_key = (normalize_label(edge.fixed_node.raw_node), base_part, side)
         edge_by_key[group_key] = edge
 
     checked_pairs: set[tuple[str, str]] = set()
@@ -1062,7 +1071,7 @@ def spatially_disambiguate_bilateral_interaction_edges(
         )
 
 
-def build_contact_constraints(
+def build_dynamic_interaction_edges(
     sig_payload: dict[str, Any],
     target_object_name: str,
     segment_catalog: SmplxSegmentCatalog,
@@ -1079,14 +1088,20 @@ def build_contact_constraints(
     contact_projection_nearby_depth_m: float,
     contact_projection_min_component_pixels: int,
     contact_projection_max_component_gap_px: float,
-) -> list[ContactConstraint]:
+) -> list[DynamicInteractionEdge]:
+    target_object_norm = normalize_label(target_object_name)
     image_hw = (camera_ctx.height, camera_ctx.width)
-    interaction_edges: list[ContactConstraint] = []
+    interaction_edges: list[DynamicInteractionEdge] = []
     seen: set[tuple[str, str]] = set()
 
     for interaction in iter_sig_interactions(sig_payload):
-        moving_part_name = interaction["body_part"]
-        scene_element = interaction["scene_element"]
+        moving_part_name = normalize_label(str(interaction["body_part"]))
+        scene_element = normalize_scene_element(
+            str(interaction["scene_element"]),
+            {target_object_norm},
+        )
+        if scene_element not in {"target_object", "floor"}:
+            continue
 
         fixed_name = target_object_name if scene_element == "target_object" else "floor"
         dedup_key = (moving_part_name, scene_element)
@@ -1094,8 +1109,23 @@ def build_contact_constraints(
             continue
         seen.add(dedup_key)
 
-        moving_segment_id = segment_catalog.get_contact_segment_id(moving_part_name)
+        moving_node = InteractionNode(
+            raw_node=f"human.{moving_part_name.replace(' ', '_')}",
+            entity_name="human",
+            part_name=moving_part_name,
+            is_human=True,
+        )
+        fixed_node = InteractionNode(
+            raw_node=fixed_name,
+            entity_name=fixed_name,
+            part_name=fixed_name,
+            is_human=False,
+        )
+        moving_segment_id = segment_catalog.get_contact_or_body_segment_id(
+            moving_part_name
+        )
         part_vert_ids = segment_catalog.get_indices(moving_segment_id)
+        moving_segment_name = segment_catalog.get_display_name(moving_segment_id)
 
         contact_mask = load_contact_mask_for_part(
             contact_masks_dir,
@@ -1168,12 +1198,17 @@ def build_contact_constraints(
         )
 
         interaction_edges.append(
-            ContactConstraint(
-                scene_element=fixed_name,
+            DynamicInteractionEdge(
+                node_a=moving_node,
+                node_b=fixed_node,
+                moving_node=moving_node,
+                fixed_node=fixed_node,
                 moving_part_name=moving_part_name,
                 moving_segment_id=moving_segment_id,
+                moving_segment_name=moving_segment_name,
                 moving_vertex_ids=np.unique(np.asarray(part_vert_ids, dtype=np.int64)),
                 fixed_points=fixed_points_part,
+                reduction=_get_reduction((moving_node, fixed_node)),
                 fixed_face_ids=expanded_face_ids,
                 fixed_vertex_ids=fixed_vertex_ids,
                 projected_mask=projected_mask,
@@ -1192,9 +1227,9 @@ def build_contact_constraints(
     for edge in interaction_edges:
         print(
             f"  final correspondence '{edge.moving_part_name}' -> "
-            f"'{edge.scene_element}': "
+            f"'{edge.fixed_node.raw_node}': "
             f"human_vertices={edge.moving_vertex_ids.size} "
-            f"scene_vertices={int(edge.fixed_vertex_ids.size)} "
+            f"scene_vertices={0 if edge.fixed_vertex_ids is None else int(edge.fixed_vertex_ids.size)} "
             f"scene_surface_points={edge.fixed_points.shape[0]}"
         )
     return interaction_edges
@@ -1349,7 +1384,10 @@ def build_initial_smplx_current(
 
 
 def clear_smplx_volume_cache(smplx_layer: Any) -> None:
-    smplx_layer.volume.detach_cache()
+    volume = getattr(smplx_layer, "volume", None)
+    detach_cache = getattr(volume, "detach_cache", None)
+    if callable(detach_cache):
+        detach_cache()
 
 
 def query_human_sdf_at_points(
@@ -1398,7 +1436,7 @@ def load_initial_smplx_vertices_camera(
 
 def compute_contact_metrics(
     evaluated_vertices: np.ndarray,
-    edges: list[ContactConstraint],
+    edges: list[DynamicInteractionEdge],
     device: torch.device,
 ) -> list[dict[str, Any]]:
     vertex_t = torch.from_numpy(evaluated_vertices.astype(np.float32)).to(device)
@@ -1409,7 +1447,7 @@ def compute_contact_metrics(
         if fixed_points.shape[0] == 0:
             raise RuntimeError(
                 f"Cannot compute contact metrics for '{edge.moving_part_name}' -> "
-                f"'{edge.scene_element}': edge has no fixed scene points."
+                f"'{edge.fixed_node.raw_node}': edge has no fixed scene points."
             )
         fixed_points = fixed_points.unsqueeze(0)
         with torch.no_grad():
@@ -1419,8 +1457,8 @@ def compute_contact_metrics(
 
         rows.append(
             {
-                "node_a": f"human.{edge.moving_part_name.replace(' ', '_')}",
-                "node_b": edge.scene_element,
+                "node_a": edge.node_a.raw_node,
+                "node_b": edge.node_b.raw_node,
                 "min_distance_m": float(torch.min(dists).detach().cpu().item()),
                 "max_distance_m": float(torch.max(dists).detach().cpu().item()),
                 "mean_distance_m": float(torch.mean(dists).detach().cpu().item()),
@@ -1484,7 +1522,7 @@ def save_projected_contact_scene_ply(
     output_root: Path,
     scene_verts_camera: np.ndarray,
     scene_faces_compact: np.ndarray,
-    edges: list[ContactConstraint],
+    edges: list[DynamicInteractionEdge],
 ) -> tuple[Path, Path] | None:
     if scene_faces_compact.shape[0] == 0:
         raise ValueError("Cannot export projected contact scene with zero faces.")
@@ -1496,7 +1534,14 @@ def save_projected_contact_scene_ply(
     legend: list[dict[str, Any]] = []
 
     for edge_index, edge in enumerate(edges):
+        if edge.fixed_face_ids is None or edge.fixed_face_ids.size == 0:
+            continue
         face_ids = np.unique(np.asarray(edge.fixed_face_ids, dtype=np.int64))
+        face_ids = face_ids[
+            (face_ids >= 0) & (face_ids < int(scene_faces_compact.shape[0]))
+        ]
+        if face_ids.size == 0:
+            continue
 
         color_rgb = projected_mask_color(edge_index)
         face_colors[face_ids] = np.asarray(
@@ -1506,10 +1551,10 @@ def save_projected_contact_scene_ply(
 
         legend.append(
             {
-                "node_a": f"human.{edge.moving_part_name.replace(' ', '_')}",
-                "node_b": edge.scene_element,
+                "node_a": edge.node_a.raw_node,
+                "node_b": edge.node_b.raw_node,
                 "moving_part": edge.moving_part_name,
-                "fixed_node": edge.scene_element,
+                "fixed_node": edge.fixed_node.raw_node,
                 "rgb": [int(value) for value in color_rgb],
                 "colored_faces": int(face_ids.size),
             }
@@ -1774,6 +1819,24 @@ def discover_completed_interaction_summaries(
     return summaries
 
 
+def resolve_single_interaction_output_paths(
+    args: argparse.Namespace,
+    interaction_name: str,
+) -> tuple[Path, Path | None]:
+    defaults = build_default_paths(interaction_name, args.output_mode)
+    if not args.update_combined:
+        return resolve_path(args.output_root, defaults["output_root"]), None
+
+    output_base = resolve_path(
+        args.output_root,
+        SCRIPT_DIR / args.output_mode,
+    )
+    return (
+        output_base / interaction_name / "physical_plausibility",
+        output_base,
+    )
+
+
 def update_combined_from_existing_metrics(output_base: Path) -> tuple[Path, Path]:
     summaries = discover_completed_interaction_summaries(output_base)
     combined_csv, combined_json = write_combined_metric_files(
@@ -1841,23 +1904,41 @@ def evaluate_external_world_humans(
                 num_pca_comps=spec.num_pca_comps,
                 flat_hand_mean=spec.flat_hand_mean,
             )
-        inputs = evaluation_inputs(
-            item.interaction_name,
-            human_mesh=Path(item.human_mesh_world).resolve(),
-            optimized_params=Path(item.optimized_params_camera).resolve(),
-            mesh_in_world=True,
-            verify_mesh=True,
+        args = argparse.Namespace(
+            output_mode="output",
+            input_scene_json=None,
+            human_pose_root=None,
+            sig_json=None,
+            smpl_seg_json=None,
+            scannet_root=None,
+            smpl_folder=None,
+            contact_masks_dir=None,
+            contact_canvas_path=None,
+            contact_spec=None,
+            human_mesh_camera=None,
+            human_mesh_world=str(Path(item.human_mesh_world).resolve()),
+            optimized_params=str(Path(item.optimized_params_camera).resolve()),
+            smpl_param_key="smpl_params_incam",
+            seed=0,
+            non_collision_surface_samples=700000,
+            contact_region_expand_rings=0,
+            contact_projection_depth_jump_m=0.05,
+            contact_projection_nearby_depth_m=0.05,
+            contact_projection_min_component_pixels=16,
+            contact_projection_max_component_gap_px=48.0,
+            mesh_reconstruction_tolerance_m=1e-4,
         )
         summaries.append(
             evaluate_interaction(
-                inputs=inputs,
-                settings=EvaluationSettings(),
+                args=args,
                 interaction_name=item.interaction_name,
                 device=device,
                 smplx_layer=method_layers[spec],
                 initial_smplx_layer=initial_smplx_layer,
                 output_root=(
-                    output_base / item.interaction_name / "physical_plausibility"
+                    output_base
+                    / item.interaction_name
+                    / "physical_plausibility"
                 ),
             )
         )
@@ -1872,8 +1953,15 @@ def parse_args() -> argparse.Namespace:
             "standalone SIG/contact-mask semantics."
         )
     )
+    parser.add_argument("--interaction_name", type=str, default="interaction_01")
     parser.add_argument(
-        "--interaction_name", default="interaction_01", help="Interaction ID, or all."
+        "--all_interactions",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Evaluate every optimized interaction found under "
+            "the selected 05_Optimize_Static_Scene output folder."
+        ),
     )
     parser.add_argument("--input_scene_json", type=str, default=None)
     parser.add_argument("--human_pose_root", type=str, default=None)
@@ -1896,12 +1984,7 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--optimized_params", type=str, default=None)
-    parser.add_argument(
-        "--output_root",
-        type=str,
-        default=None,
-        help="Evaluation base directory; metrics go under <interaction>/physical_plausibility.",
-    )
+    parser.add_argument("--output_root", type=str, default=None)
     parser.add_argument(
         "--output_mode",
         choices=OUTPUT_MODES,
@@ -1921,7 +2004,8 @@ def parse_args() -> argparse.Namespace:
         help=(
             "In single-interaction mode, rewrite combined metrics from all "
             "existing per-interaction metrics in the same output base after "
-            "the requested interaction finishes."
+            "the requested interaction finishes. With this flag, --output_root "
+            "is treated as the output base, not the exact metrics directory."
         ),
     )
     parser.add_argument("--smpl_param_key", type=str, default="smpl_params_incam")
@@ -1939,9 +2023,7 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.05,
     )
-    parser.add_argument(
-        "--contact_projection_min_component_pixels", type=int, default=16
-    )
+    parser.add_argument("--contact_projection_min_component_pixels", type=int, default=16)
     parser.add_argument(
         "--contact_projection_max_component_gap_px",
         type=float,
@@ -1951,28 +2033,49 @@ def parse_args() -> argparse.Namespace:
 
 
 def evaluate_interaction(
-    inputs: EvaluationInputs,
-    settings: EvaluationSettings,
+    args: argparse.Namespace,
     interaction_name: str,
     device: torch.device,
     smplx_layer: Any,
     output_root: Path,
     initial_smplx_layer: Any | None = None,
 ) -> dict[str, Any]:
-    input_scene_json_path = inputs.input_scene_json
-    human_pose_root = inputs.human_pose_root
-    sig_json_path = inputs.sig_json
-    smpl_seg_json_path = inputs.smpl_seg_json
-    contact_masks_dir = inputs.contact_masks_dir
-    contact_canvas_path = inputs.contact_canvas_path
-    contact_spec_path = inputs.contact_spec
-    optimized_params_path = inputs.optimized_params
+    defaults = build_default_paths(interaction_name, args.output_mode)
+    input_scene_json_path = resolve_path(args.input_scene_json, defaults["input_scene_json"])
+    human_pose_root = resolve_path(args.human_pose_root, defaults["human_pose_root"])
+    sig_json_path = resolve_path(args.sig_json, defaults["sig_json"])
+    smpl_seg_json_path = resolve_path(args.smpl_seg_json, defaults["smpl_seg_json"])
+    contact_masks_dir = resolve_path(args.contact_masks_dir, defaults["contact_masks_dir"])
+    contact_canvas_path = resolve_path(args.contact_canvas_path, defaults["contact_canvas_path"])
+    contact_spec_path = resolve_path(args.contact_spec, defaults["contact_spec"])
+    human_mesh_camera_path = resolve_path(args.human_mesh_camera, defaults["human_mesh_camera"])
+    human_mesh_world_raw = getattr(args, "human_mesh_world", None)
+    human_mesh_world_path = (
+        Path(human_mesh_world_raw).resolve()
+        if human_mesh_world_raw is not None
+        else None
+    )
+    optimized_params_path = resolve_path(args.optimized_params, defaults["optimized_params"])
+    scannet_root = resolve_scannet_root(args.scannet_root)
     output_root = ensure_dir(output_root)
+
+    if not contact_masks_dir.is_dir():
+        raise FileNotFoundError(f"Contact masks directory not found: {contact_masks_dir}")
+    if human_mesh_world_path is not None and not human_mesh_world_path.exists():
+        raise FileNotFoundError(
+            f"Evaluated world-coordinate human mesh not found: {human_mesh_world_path}"
+        )
+    if human_mesh_world_path is None and not human_mesh_camera_path.exists():
+        raise FileNotFoundError(f"Evaluated human mesh not found: {human_mesh_camera_path}")
+    if args.output_mode != "output_init" and not optimized_params_path.exists():
+        raise FileNotFoundError(f"Optimized SMPL-X params not found: {optimized_params_path}")
+    if not human_pose_root.is_dir():
+        raise FileNotFoundError(f"Static GVHMR result directory not found: {human_pose_root}")
 
     input_payload = load_json(input_scene_json_path)
     sig_payload = load_json(sig_json_path)
     scene_context = input_payload["scene_context"]
-    scene_paths = resolve_scene_paths(inputs.scannet_root, scene_context)
+    scene_paths = resolve_scene_paths(scannet_root, scene_context)
     (
         _intrinsics,
         rotation_world_to_camera,
@@ -2017,14 +2120,20 @@ def evaluate_interaction(
         contact_scene_faces_render,
         contact_scene_vertex_source_ids,
     ) = compact_mesh_with_vertex_ids(scene_verts_camera, contact_scene_faces_in_view)
+    if contact_scene_faces_render.shape[0] == 0:
+        raise RuntimeError(
+            "No scene faces remained after contact crop camera filtering."
+        )
 
     print("Loading initial SMPL-X vertices for bilateral contact disambiguation")
     init_verts_camera = load_initial_smplx_vertices_camera(
         human_pose_root=human_pose_root,
-        smpl_param_key=settings.smpl_param_key,
+        smpl_param_key=args.smpl_param_key,
         device=device,
         smplx_layer=(
-            initial_smplx_layer if initial_smplx_layer is not None else smplx_layer
+            initial_smplx_layer
+            if initial_smplx_layer is not None
+            else smplx_layer
         ),
     )
     if init_verts_camera.shape[0] != segment_catalog.vertex_count:
@@ -2034,12 +2143,10 @@ def evaluate_interaction(
             f"segmentation={segment_catalog.vertex_count}"
         )
 
-    evaluated_human_path = inputs.human_mesh
+    evaluated_human_path = human_mesh_world_path or human_mesh_camera_path
     print(f"Loading evaluated human mesh from: {evaluated_human_path}")
-    evaluated_vertices, _evaluated_faces = load_mesh(
-        evaluated_human_path, process=False
-    )
-    if inputs.mesh_in_world:
+    evaluated_vertices, _evaluated_faces = load_mesh(evaluated_human_path, process=False)
+    if human_mesh_world_path is not None or args.output_mode == "output_init":
         evaluated_vertices = transform_world_to_camera(
             evaluated_vertices,
             rotation_world_to_camera=rotation_world_to_camera,
@@ -2052,7 +2159,7 @@ def evaluate_interaction(
             f"segmentation={segment_catalog.vertex_count}"
         )
 
-    interaction_edges = build_contact_constraints(
+    interaction_edges = build_dynamic_interaction_edges(
         sig_payload=sig_payload,
         target_object_name=target_object_name,
         segment_catalog=segment_catalog,
@@ -2062,18 +2169,16 @@ def evaluate_interaction(
         scene_vertex_source_ids=contact_scene_vertex_source_ids,
         camera_ctx=contact_camera_ctx,
         device=device,
-        expand_rings=int(settings.contact_region_expand_rings),
-        surface_sample_seed=int(settings.seed),
+        expand_rings=int(args.contact_region_expand_rings),
+        surface_sample_seed=int(args.seed),
         init_verts_camera=init_verts_camera,
-        contact_projection_depth_jump_m=float(settings.contact_projection_depth_jump_m),
-        contact_projection_nearby_depth_m=float(
-            settings.contact_projection_nearby_depth_m
-        ),
+        contact_projection_depth_jump_m=float(args.contact_projection_depth_jump_m),
+        contact_projection_nearby_depth_m=float(args.contact_projection_nearby_depth_m),
         contact_projection_min_component_pixels=int(
-            settings.contact_projection_min_component_pixels
+            args.contact_projection_min_component_pixels
         ),
         contact_projection_max_component_gap_px=float(
-            settings.contact_projection_max_component_gap_px
+            args.contact_projection_max_component_gap_px
         ),
     )
     projected_scene_paths = save_projected_contact_scene_ply(
@@ -2097,25 +2202,23 @@ def evaluate_interaction(
     non_collision_scene_points = sample_mesh_surface_points(
         verts=contact_scene_verts_camera,
         faces=contact_scene_faces_render,
-        num_samples=int(settings.non_collision_surface_samples),
-        seed=NON_COLLISION_SURFACE_SAMPLE_SEED + int(settings.seed),
+        num_samples=int(args.non_collision_surface_samples),
+        seed=NON_COLLISION_SURFACE_SAMPLE_SEED + int(args.seed),
     )
-    if inputs.initial_pose:
+    if args.output_mode == "output_init":
         optimized_current = build_initial_smplx_current(
             human_pose_root=human_pose_root,
-            smpl_param_key=settings.smpl_param_key,
+            smpl_param_key=args.smpl_param_key,
             smplx_layer=smplx_layer,
             device=device,
         )
     else:
-        optimized_params = load_optimized_smplx_params(
-            optimized_params_path, device=device
-        )
+        optimized_params = load_optimized_smplx_params(optimized_params_path, device=device)
         optimized_current = build_optimized_smplx_current(
             smplx_layer=smplx_layer,
             optimized_params=optimized_params,
         )
-    if inputs.verify_mesh:
+    if human_mesh_world_path is not None:
         evaluated_vertices_t = torch.from_numpy(
             evaluated_vertices.astype(np.float32)
         ).to(device)
@@ -2130,13 +2233,11 @@ def evaluate_interaction(
             torch.linalg.vector_norm(
                 reconstructed_vertices - evaluated_vertices_t,
                 dim=-1,
-            )
-            .max()
-            .detach()
-            .cpu()
-            .item()
+            ).max().detach().cpu().item()
         )
-        tolerance_m = float(settings.mesh_reconstruction_tolerance_m)
+        tolerance_m = float(
+            getattr(args, "mesh_reconstruction_tolerance_m", 1e-4)
+        )
         print(
             "  exact method mesh reconstruction max error: "
             f"{max_reconstruction_error:.9f}m"
@@ -2204,35 +2305,24 @@ def _ensure_all_mode_compatible_args(args: argparse.Namespace) -> None:
         "human_mesh_world",
         "optimized_params",
     ]
-    used = [
-        name for name in per_interaction_overrides if getattr(args, name) is not None
-    ]
+    used = [name for name in per_interaction_overrides if getattr(args, name) is not None]
     if used:
         raise ValueError(
-            "--interaction_name all cannot be combined with per-interaction path "
+            "--all_interactions cannot be combined with per-interaction path "
             f"overrides: {used}"
         )
 
 
 def main() -> None:
     args = parse_args()
-    all_mode = args.interaction_name == "all"
+    all_mode = bool(args.all_interactions) or normalize_label(args.interaction_name) == "all"
     if all_mode:
         _ensure_all_mode_compatible_args(args)
         interaction_names = discover_optimized_interactions(args.output_mode)
+        output_base = resolve_path(args.output_root, SCRIPT_DIR / args.output_mode)
     else:
         interaction_names = [args.interaction_name]
-    output_base = resolve_path(args.output_root, SCRIPT_DIR / args.output_mode)
-    settings = EvaluationSettings(
-        smpl_param_key=args.smpl_param_key,
-        seed=args.seed,
-        non_collision_surface_samples=args.non_collision_surface_samples,
-        contact_region_expand_rings=args.contact_region_expand_rings,
-        contact_projection_depth_jump_m=args.contact_projection_depth_jump_m,
-        contact_projection_nearby_depth_m=args.contact_projection_nearby_depth_m,
-        contact_projection_min_component_pixels=args.contact_projection_min_component_pixels,
-        contact_projection_max_component_gap_px=args.contact_projection_max_component_gap_px,
-    )
+        output_base = None
 
     device = parse_device(args.device)
     smpl_defaults = build_default_paths(interaction_names[0], args.output_mode)
@@ -2241,41 +2331,22 @@ def main() -> None:
 
     summaries: list[dict[str, Any]] = []
     for interaction_name in interaction_names:
-        path_fields = (
-            "input_scene_json",
-            "human_pose_root",
-            "sig_json",
-            "smpl_seg_json",
-            "contact_masks_dir",
-            "contact_canvas_path",
-            "contact_spec",
-            "optimized_params",
-            "scannet_root",
-        )
-        overrides = {
-            name: Path(getattr(args, name)).resolve()
-            for name in path_fields
-            if getattr(args, name) is not None
-        }
-        if args.human_mesh_world is not None:
-            overrides.update(
-                human_mesh=Path(args.human_mesh_world).resolve(),
-                mesh_in_world=True,
-                verify_mesh=True,
+        if all_mode:
+            interaction_output_root = (
+                output_base / interaction_name / "physical_plausibility"
             )
-        elif args.human_mesh_camera is not None:
-            overrides.update(
-                human_mesh=Path(args.human_mesh_camera).resolve(), mesh_in_world=False
+        else:
+            interaction_output_root, output_base = resolve_single_interaction_output_paths(
+                args,
+                interaction_name,
             )
-        inputs = evaluation_inputs(interaction_name, args.output_mode, **overrides)
         summaries.append(
             evaluate_interaction(
-                inputs=inputs,
-                settings=settings,
+                args=args,
                 interaction_name=interaction_name,
                 device=device,
                 smplx_layer=smplx_layer,
-                output_root=output_base / interaction_name / "physical_plausibility",
+                output_root=interaction_output_root,
             )
         )
 
@@ -2291,12 +2362,8 @@ def main() -> None:
         mean_max_contact = float(
             np.mean([row["mean_max_contact_distance_m"] for row in summaries])
         )
-        mean_contact = float(
-            np.mean([row["mean_contact_distance_m"] for row in summaries])
-        )
-        mean_penetration = float(
-            np.mean([row["mean_penetration_m"] for row in summaries])
-        )
+        mean_contact = float(np.mean([row["mean_contact_distance_m"] for row in summaries]))
+        mean_penetration = float(np.mean([row["mean_penetration_m"] for row in summaries]))
         mean_max_penetration = float(
             np.mean([row["max_penetration_m"] for row in summaries])
         )
@@ -2311,6 +2378,8 @@ def main() -> None:
         print(f"  csv={combined_csv}")
         print(f"  json={combined_json}")
     elif args.update_combined:
+        if output_base is None:
+            raise RuntimeError("Cannot update combined metrics without an output base.")
         update_combined_from_existing_metrics(output_base)
 
 

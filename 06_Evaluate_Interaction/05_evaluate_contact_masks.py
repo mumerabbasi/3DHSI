@@ -111,7 +111,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--interaction_name",
         dest="interaction_name",
         default=None,
-        help="Evaluate one interaction (for example interaction_01).",
+        help="Evaluate one interaction (for example interaction_02).",
     )
     return parser.parse_args(argv)
 

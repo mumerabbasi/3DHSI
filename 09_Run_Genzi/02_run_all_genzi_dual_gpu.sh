@@ -24,8 +24,8 @@ usage() {
     echo
     echo "Prepares every Module 05 interaction on two GPUs, then runs native GenZI."
     echo "Preparation requires and reuses Module 08's validated crop mesh and TSDF."
-    echo "If default-distance preparation fails, interaction 07 retries at 1.8m and"
-    echo "interaction 20 retries at 1.0m. No other interaction receives a fallback."
+    echo "If default-distance preparation fails, interaction 08 retries at 1.8m and"
+    echo "interaction 26 retries at 1.0m. No other interaction receives a fallback."
     echo
     echo "Options:"
     echo "  --gpu-ids ID0,ID1       Physical GPU IDs (default: 0,1)"
@@ -192,7 +192,7 @@ prepare_worker() {
                 --seed "${worker_seed}"
                 --no-root-summary
             )
-            if [[ "${interaction}" == "interaction_18" ]]; then
+            if [[ "${interaction}" == "interaction_23" ]]; then
                 # Disambiguate the requested drawer cabinet from the visually
                 # similar cabinet at the bottom-right of the source image.
                 prep_args+=(--target-box 900 500 1140 800)
@@ -211,10 +211,10 @@ prepare_worker() {
                 :
             else
                 case "${interaction}" in
-                    interaction_07)
+                    interaction_08)
                         fallback_distance="1.8"
                         ;;
-                    interaction_20)
+                    interaction_26)
                         fallback_distance="1.0"
                         ;;
                     *)

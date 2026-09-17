@@ -27,10 +27,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Evaluate PhySIC renders with the module-06 VLM verifier."
     )
-    parser.add_argument(
-        "--interaction_name", default="interaction_01", help="Interaction ID, or all."
-    )
+    parser.add_argument("--interaction_name", type=str, default="interaction_01")
     parser.add_argument("--output_mode", default=DEFAULT_OUTPUT_MODE)
+    parser.add_argument(
+        "--all_interactions",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
     parser.add_argument(
         "--aggregate_evals",
         action=argparse.BooleanOptionalAction,
@@ -43,6 +46,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--qwen_model", type=str, default=BASE.DEFAULT_QWEN_MODEL)
     parser.add_argument("--gemini_model", type=str, default=BASE.DEFAULT_GEMINI_MODEL)
+    parser.add_argument("--model", type=str, default=None)
     parser.add_argument("--ollama_host", type=str, default="http://localhost:11434")
     parser.add_argument(
         "--gemini_api_key_file",
@@ -50,6 +54,7 @@ def parse_args() -> argparse.Namespace:
         default=str(PROJECT_DIR / ".secrets" / "gemini_api_key"),
     )
     parser.add_argument("--prompt_template", type=str, default=None)
+    parser.add_argument("--system_prompt", type=str, default=None)
     parser.add_argument("--output_root", type=str, default=None)
     parser.add_argument("--max_image_side", type=int, default=1024)
     parser.add_argument("--temperature", type=float, default=BASE.DEFAULT_TEMPERATURE)
@@ -59,10 +64,45 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gemini_retries", type=int, default=3)
     parser.add_argument("--gemini_retry_sleep_s", type=float, default=10.0)
     args = parser.parse_args()
+    if args.model is not None:
+        args.qwen_model = args.model
     return args
 
 
-def aggregate(output_root: Path) -> None:
+def make_base_args(interaction_name: str, args: argparse.Namespace) -> argparse.Namespace:
+    output_root = (
+        Path(args.output_root).resolve()
+        if args.output_root
+        else physic_eval_root(args.output_mode) / interaction_name / "vlm"
+    )
+    return argparse.Namespace(
+        output_mode=args.output_mode,
+        input_scene_json=str(
+            PROJECT_DIR
+            / "01_Generate_SIG"
+            / "input_prompts"
+            / interaction_name
+            / "input_scene.json"
+        ),
+        render_root=str(physic_eval_root(args.output_mode) / interaction_name / "semantics"),
+        output_root=str(output_root),
+        vlm_provider=args.vlm_provider,
+        qwen_model=args.qwen_model,
+        gemini_model=args.gemini_model,
+        ollama_host=args.ollama_host,
+        gemini_api_key_file=args.gemini_api_key_file,
+        max_image_side=args.max_image_side,
+        temperature=args.temperature,
+        seed=args.seed,
+        timeout_s=args.timeout_s,
+        gemini_max_output_tokens=args.gemini_max_output_tokens,
+        gemini_retries=args.gemini_retries,
+        gemini_retry_sleep_s=args.gemini_retry_sleep_s,
+    )
+
+
+def aggregate(output_mode: str) -> None:
+    output_root = physic_eval_root(output_mode)
     metrics_csv_paths = sorted(output_root.glob("interaction_*/vlm/metrics.csv"))
     if not metrics_csv_paths:
         raise FileNotFoundError(
@@ -92,23 +132,24 @@ def aggregate(output_root: Path) -> None:
 
 def main() -> None:
     args = parse_args()
-    output_base = (
-        Path(args.output_root).resolve()
-        if args.output_root
-        else physic_eval_root(args.output_mode)
-    )
     if args.aggregate_evals:
-        aggregate(output_base)
+        aggregate(args.output_mode)
         return
 
-    prompt_template_override = args.prompt_template
+    prompt_template_override = (
+        args.prompt_template
+        if args.prompt_template is not None
+        else args.system_prompt
+    )
     prompt_template_path = BASE.resolve_path(
         prompt_template_override,
         BASE.DEFAULT_PROMPT_TEMPLATE_PATH,
     )
     prompt_template = BASE.load_text(prompt_template_path)
-    all_mode = args.interaction_name == "all"
+    all_mode = bool(args.all_interactions) or args.interaction_name == "all"
     if all_mode:
+        if args.output_root is not None:
+            raise ValueError("--all_interactions cannot be combined with --output_root.")
         interaction_names = discover_physic_interactions(args.output_mode)
     else:
         interaction_names = [args.interaction_name]
@@ -116,21 +157,13 @@ def main() -> None:
     for interaction_name in interaction_names:
         BASE.evaluate_interaction_vlm(
             interaction_name=interaction_name,
-            args=args,
-            input_scene_json_path=PROJECT_DIR
-            / "01_Generate_SIG"
-            / "input_prompts"
-            / interaction_name
-            / "input_scene.json",
-            render_root=physic_eval_root(args.output_mode)
-            / interaction_name
-            / "semantics",
-            output_root=output_base / interaction_name / "vlm",
+            args=make_base_args(interaction_name, args),
             prompt_template=prompt_template,
+            prompt_template_path=prompt_template_path,
         )
 
     if all_mode:
-        aggregate(output_base)
+        aggregate(args.output_mode)
 
 
 if __name__ == "__main__":

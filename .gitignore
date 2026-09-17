@@ -1,45 +1,54 @@
-# Local environments, secrets, and caches
+# --- Python & Caches ---
+__pycache__/
+*.py[cod]
+*.so
+*$py.class
+.pytest_cache/
+.cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# --- Environment & Variables ---
 .env
 .secrets/
+.venv
 .venv/
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
-.cache/
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.ipynb_checkpoints/
-__pycache__/
-*.py[cod]
-*.so
-
-# Generated results and research notes
-*output*/
-/00_Notes/
-/00_Visualizations_Thesis/
-first_frames/
-generated_videos/
-checkpoints/
-logs/
-runs/
-wandb/
-/09_Run_Genzi/old/
-/Original_Code/
-
-# Other generated assets
-/04_Estimate_Human_Pose/assets/smplx_contact_regions_*.png
-/04_Estimate_Human_Pose/assets/smplx_contact_regions_render_assets/
-/06_Evaluate_Interaction/ablation_metrics.csv
 *.log
+
+# --- VS Code & IDE Configs ---
+.vscode/
+*.code-workspace
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*.swo
+*~
+
+# --- Linter & Formatters ---
+.flake8
+.pylintrc
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# --- Generated Media (Images & Videos) ---
+# Prevent accidental commit of thousands of generated frames
 *.gif
 *.avi
 *.mov
 *.mkv
 *.webm
 *.exr
+
+# --- 3D Media (Meshes & Point Clouds) ---
 *.obj
 *.fbx
 *.glb
@@ -53,25 +62,57 @@ wandb/
 *.laz
 *.npy
 *.pkl
+
+# --- Generated Blender Assets ---
+07_Evaluate_Interaction/output/**/semantics/assets/render_config.json
+07_Evaluate_Interaction/output/**/semantics/assets/render_driver.py
+07_Evaluate_Interaction/output/**/semantics/assets/render_scene.blend
+07_Evaluate_Interaction/output/**/semantics/assets/render_scene.blend1
+07_Evaluate_Interaction/output/**/semantics/assets/scene_*_crop.ply
+
+# --- Output Directories ---
+# Ignore specific output folders you are creating
+first_frames/
+generated_videos/
+checkpoints/
+logs/
+outputs/
+runs/
+wandb/
+
+# --- Generated Artifacts: Modules 04-09 ---
+# Keep source, documentation, static configuration, and canonical small assets;
+# keep generated pipeline/evaluation artifacts local only.
+/04_Estimate_Human_Pose/output*/
+/04_Estimate_Human_Pose/assets/smplx_contact_regions_*.png
+/04_Estimate_Human_Pose/assets/smplx_contact_regions_render_assets/
+/05_Optimize_Static_Scene/output*/
+/06_Evaluate_Interaction/output*/
+/06_Evaluate_Interaction/ablation_metrics.csv
+/07_Run_PhySIC/output*/
+/07_Run_PhySIC/old_output*/
+/07_Run_PhySIC/evaluation/output*/
+/08_Run_Prox/output*/
+/08_Run_Prox/old_output*/
+/08_Run_Prox/evaluation/output*/
+/09_Run_Genzi/output*/
+/09_Run_Genzi/old/
+/09_Run_Genzi/evaluation/output*/
+
+# --- Model Weights (Large Files) ---
 *.safetensors
 *.ckpt
 *.pt
 *.pth
 *.bin
 *.onnx
+*.obj
 
-# Editor and OS files
-.vscode/
-.idea/
-*.code-workspace
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.swp
-*.swo
-*~
+# --- OS Specific ---
 .DS_Store
 Thumbs.db
 ._*
 __MACOSX/
+
+# --- Misc ---
+Original_Code

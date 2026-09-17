@@ -89,11 +89,16 @@ def discover_interactions(output_mode: str) -> list[str]:
 
 
 def resolve_prompt(input_scene_json_path: Path) -> str:
-    prompt = load_json(input_scene_json_path)["interaction_context"][
-        "interaction"
-    ].strip()
+    input_payload = load_json(input_scene_json_path)
+    interaction_context = input_payload.get("interaction_context", {})
+    prompt = ""
+    if isinstance(interaction_context, dict):
+        prompt = str(interaction_context.get("interaction", "")).strip()
     if not prompt:
-        raise ValueError(f"Empty interaction instruction: {input_scene_json_path}")
+        raise ValueError(
+            f"Could not resolve interaction_context.interaction from "
+            f"{input_scene_json_path}"
+        )
     return prompt
 
 
@@ -104,7 +109,9 @@ def collect_render_paths(render_root: Path) -> list[Path]:
         for path in render_dir.glob("view_*.png")
         if path.stem.removeprefix("view_").isdigit()
     )
-    return image_paths
+    if image_paths:
+        return image_paths
+    return []
 
 
 def parse_device(raw_device: str) -> torch.device:
@@ -131,7 +138,10 @@ def compute_clip_score(
         padding=True,
         truncation=True,
     )
-    inputs = inputs.to(device)
+    inputs = {
+        key: value.to(device) if hasattr(value, "to") else value
+        for key, value in inputs.items()
+    }
     with torch.no_grad():
         outputs = model(**inputs)
         text_features = outputs.text_embeds
@@ -152,14 +162,18 @@ def compute_clip_score(
 
 def evaluate_interaction_semantics(
     interaction_name: str,
-    input_scene_json_path: Path,
-    render_root: Path,
-    output_root: Path,
+    args: argparse.Namespace,
     model: CLIPModel,
     processor: CLIPProcessor,
     device: torch.device,
 ) -> dict[str, Any]:
-    output_root = ensure_dir(output_root)
+    defaults = build_default_paths(interaction_name, args.output_mode)
+    input_scene_json_path = resolve_path(
+        args.input_scene_json,
+        defaults["input_scene_json"],
+    )
+    render_root = resolve_path(args.render_root, defaults["render_root"])
+    output_root = ensure_dir(resolve_path(args.output_root, defaults["output_root"]))
 
     render_paths = collect_render_paths(render_root)
     if not render_paths:
@@ -205,9 +219,7 @@ def parse_args() -> argparse.Namespace:
             "similarity over Blender renders."
         )
     )
-    parser.add_argument(
-        "--interaction_name", default="interaction_01", help="Interaction ID, or all."
-    )
+    parser.add_argument("--interaction_name", type=str, default="interaction_01")
     parser.add_argument(
         "--output_mode",
         choices=OUTPUT_MODES,
@@ -220,6 +232,11 @@ def parse_args() -> argparse.Namespace:
             "reads/writes the module-04 first-frame evaluation folder."
         ),
     )
+    parser.add_argument(
+        "--all_interactions",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     parser.add_argument("--input_scene_json", type=str, default=None)
     parser.add_argument("--render_root", type=str, default=None)
     parser.add_argument("--output_root", type=str, default=None)
@@ -230,22 +247,22 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    all_mode = args.interaction_name == "all"
+    all_mode = bool(args.all_interactions) or args.interaction_name == "all"
     if all_mode:
         if any(
-            value is not None for value in (args.input_scene_json, args.render_root)
+            value is not None
+            for value in (args.input_scene_json, args.render_root, args.output_root)
         ):
             raise ValueError(
-                "--interaction_name all cannot be combined with per-interaction "
-                "input/render overrides."
+                "--all_interactions cannot be combined with per-interaction "
+                "input/render/output overrides."
             )
         interaction_names = discover_interactions(args.output_mode)
+        combined_output_root = ensure_dir(SCRIPT_DIR / args.output_mode)
     else:
         interaction_names = [args.interaction_name]
+        combined_output_root = None
 
-    combined_output_root = ensure_dir(
-        resolve_path(args.output_root, SCRIPT_DIR / args.output_mode)
-    )
     device = parse_device(args.device)
     print(f"Loading CLIP model: {args.clip_model}")
     processor = CLIPProcessor.from_pretrained(args.clip_model)
@@ -255,17 +272,7 @@ def main() -> None:
     rows = [
         evaluate_interaction_semantics(
             interaction_name=interaction_name,
-            input_scene_json_path=resolve_path(
-                args.input_scene_json,
-                build_default_paths(interaction_name, args.output_mode)[
-                    "input_scene_json"
-                ],
-            ),
-            render_root=resolve_path(
-                args.render_root,
-                build_default_paths(interaction_name, args.output_mode)["render_root"],
-            ),
-            output_root=combined_output_root / interaction_name / "semantics",
+            args=args,
             model=model,
             processor=processor,
             device=device,

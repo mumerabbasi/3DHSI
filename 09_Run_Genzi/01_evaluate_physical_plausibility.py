@@ -30,7 +30,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Evaluate selected GenZI outputs through Module 06."
     )
-    parser.add_argument("--interaction_name", default="interaction_01")
+    parser.add_argument("--interaction_name", default="interaction_02")
+    parser.add_argument("--all_interactions", action="store_true")
     parser.add_argument("--output_mode", default=DEFAULT_OUTPUT_MODE)
     parser.add_argument("--output_root", type=Path, default=None)
     parser.add_argument(
@@ -44,7 +45,7 @@ def main() -> None:
     args = parse_args()
     names = (
         discover_genzi_interactions(args.output_mode, args.selection_config)
-        if args.interaction_name == "all"
+        if args.all_interactions or args.interaction_name == "all"
         else [args.interaction_name]
     )
     candidates = [

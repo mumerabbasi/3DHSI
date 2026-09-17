@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import mimetypes
 from pathlib import Path
 from typing import Any
 
-from PIL import Image
+from openai import OpenAI
 
 
 HUMAN_PARTS = (
@@ -49,6 +51,16 @@ def save_scene_image(source_path: Path, output_path: Path) -> None:
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     Image.open(source_path).convert("RGB").save(output_path)
+
+
+def strip_json_fence(text: str) -> str:
+    text = (text or "").strip()
+    if not text.startswith("```"):
+        return text
+    lines = text.splitlines()[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
 
 
 def normalize_label(text: str) -> str:
@@ -109,33 +121,54 @@ def resolve_scene_image_path(scannet_root: Path, scene_context: dict[str, Any]) 
     return scannet_root / scene_id / image_rel / camera_name
 
 
+def encode_image_data_url(image_path: Path) -> str:
+    mime_type = mimetypes.guess_type(str(image_path))[0] or "image/jpeg"
+    encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+def build_user_message_content(
+    user_payload: dict[str, Any],
+    scene_image_path: Path,
+) -> list[dict[str, Any]]:
+    text = (
+        "Use the provided scene image and JSON request to generate the SIG.\n\n"
+        f"JSON request:\n{json.dumps(user_payload, ensure_ascii=False, indent=2)}"
+    )
+    return [
+        {"type": "text", "text": text},
+        {
+            "type": "image_url",
+            "image_url": {"url": encode_image_data_url(scene_image_path)},
+        },
+    ]
+
+
 def request_sig(
-    client: Any,
+    client: OpenAI,
     model: str,
     system_prompt: str,
     user_payload: dict[str, Any],
     scene_image_path: Path,
     temperature: float,
+    reasoning_effort: str | None,
 ) -> dict[str, Any]:
-    from google.genai import types
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": build_user_message_content(user_payload, scene_image_path),
+            },
+        ],
+        "temperature": temperature,
+    }
+    if reasoning_effort is not None:
+        kwargs["reasoning_effort"] = reasoning_effort
 
-    prompt = (
-        "Use the provided scene image and JSON request to generate the SIG.\n\n"
-        f"JSON request:\n{json.dumps(user_payload, ensure_ascii=False, indent=2)}"
-    )
-    with Image.open(scene_image_path) as image:
-        response = client.models.generate_content(
-            model=model,
-            contents=[prompt, image.convert("RGB")],
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=temperature,
-                response_mime_type="application/json",
-            ),
-        )
-    text = response.text
-    if not text:
-        raise RuntimeError("Gemini did not return a SIG JSON response.")
+    response = client.chat.completions.create(**kwargs)
+    text = strip_json_fence(response.choices[0].message.content)
     return json.loads(text)
 
 
@@ -147,9 +180,7 @@ def validate_sig(sig: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(raw_target_objects, list) or not raw_target_objects:
         raise ValueError("SIG must contain a non-empty target_objects list.")
     if len(raw_target_objects) > len(TARGET_OBJECT_IDS):
-        raise ValueError(
-            f"SIG can contain at most {len(TARGET_OBJECT_IDS)} target objects."
-        )
+        raise ValueError(f"SIG can contain at most {len(TARGET_OBJECT_IDS)} target objects.")
 
     target_objects: list[dict[str, str]] = []
     target_label_to_id: dict[str, str] = {}
@@ -159,9 +190,7 @@ def validate_sig(sig: dict[str, Any]) -> dict[str, Any]:
         target_id = TARGET_OBJECT_IDS[index]
         label = str(target_object.get("label", "")).strip()
         if not label:
-            raise ValueError(
-                "Each target_objects entry must contain a non-empty label."
-            )
+            raise ValueError("Each target_objects entry must contain a non-empty label.")
         normalized_label = normalize_label(label)
         if normalized_label in target_label_to_id:
             raise ValueError(f"Duplicate target object label '{label}'.")
@@ -171,9 +200,7 @@ def validate_sig(sig: dict[str, Any]) -> dict[str, Any]:
 
     raw_edges = sig.get("interaction_edges")
     if not isinstance(raw_edges, list) or not raw_edges:
-        raise ValueError(
-            "SIG must contain at least one interaction edge in interaction_edges."
-        )
+        raise ValueError("SIG must contain at least one interaction edge in interaction_edges.")
 
     clean_edges: list[dict[str, Any]] = []
     edge_human_parts: set[str] = set()
@@ -182,25 +209,20 @@ def validate_sig(sig: dict[str, Any]) -> dict[str, Any]:
     seen_edges: set[tuple[str, str]] = set()
     for edge in raw_edges:
         if not isinstance(edge, dict):
-            raise ValueError("Each interaction edge must be an object.")
+            continue
         human_part = normalize_label(str(edge.get("human_part", "")))
         scene_element = normalize_scene_element(
             str(edge.get("scene_element", "")),
             target_label_to_id,
         )
         if not human_part or not scene_element:
-            raise ValueError(
-                "Each interaction edge requires human_part and scene_element."
-            )
+            continue
         if human_part not in HUMAN_PART_VOCAB:
             raise ValueError(
                 f"Unsupported SIG human_part '{human_part}'. "
                 f"Allowed parts: {sorted(HUMAN_PART_VOCAB)}"
             )
-        if (
-            scene_element in TARGET_OBJECT_IDS
-            and scene_element not in active_target_ids
-        ):
+        if scene_element in TARGET_OBJECT_IDS and scene_element not in active_target_ids:
             raise ValueError(
                 f"SIG interaction edge references '{scene_element}', "
                 "but that target object is not defined in target_objects."
@@ -287,7 +309,9 @@ def validate_sig(sig: dict[str, Any]) -> dict[str, Any]:
         for part_name in HUMAN_PARTS
         if part_name in node_human_parts
     ]
-    sig["scene_nodes"] = [node for node in SCENE_NODE_ORDER if node in scene_nodes]
+    sig["scene_nodes"] = [
+        node for node in SCENE_NODE_ORDER if node in scene_nodes
+    ]
     sig["interaction_edges"] = clean_edges
     sig["interaction"] = interaction
     return sig
@@ -298,17 +322,18 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Generate a Scene Interaction Graph for a static scene.")
     parser.add_argument("--interaction_name", default="interaction_01")
-    parser.add_argument(
-        "--api-key-file",
-        type=Path,
-        default=script_dir.parent / ".secrets" / "gemini_api_key",
-    )
-    parser.add_argument("--model", default="gemini-3.7-flash")
+    parser.add_argument("--host", default="http://localhost:11434/v1")
+    parser.add_argument("--model", default="qwen3.6:27b")
     parser.add_argument("--system-prompt", default=None)
     parser.add_argument("--input-dir", default=None)
     parser.add_argument("--outdir", default=None)
     parser.add_argument("--scannet-root", default=None)
     parser.add_argument("--temperature", type=float, default=0.2)
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=["low", "medium", "high", "none"],
+        default="none",
+    )
     args = parser.parse_args()
 
     input_dir = (
@@ -331,15 +356,9 @@ def main() -> None:
     )
     system_prompt = system_prompt_path.read_text(encoding="utf-8")
     model_input = build_model_input(input_payload)
-    from google import genai
+    reasoning_effort = None if args.reasoning_effort == "none" else args.reasoning_effort
 
-    api_key_path = args.api_key_file.resolve()
-    if not api_key_path.is_file():
-        raise FileNotFoundError(f"Gemini API key file not found: {api_key_path}")
-    api_key = api_key_path.read_text(encoding="utf-8").strip()
-    if not api_key:
-        raise ValueError(f"Gemini API key file is empty: {api_key_path}")
-    client = genai.Client(api_key=api_key)
+    client = OpenAI(base_url=args.host, api_key="ollama")
     sig = request_sig(
         client=client,
         model=args.model,
@@ -347,6 +366,7 @@ def main() -> None:
         user_payload=model_input,
         scene_image_path=scene_image_path,
         temperature=args.temperature,
+        reasoning_effort=reasoning_effort,
     )
     sig = validate_sig(sig)
     out_path = output_root / "sig.json"

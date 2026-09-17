@@ -33,8 +33,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Evaluate selected GenZI renders with Module 06's CLIP metric."
     )
-    parser.add_argument("--interaction_name", default="interaction_01")
+    parser.add_argument("--interaction_name", default="interaction_02")
     parser.add_argument("--output_mode", default=DEFAULT_OUTPUT_MODE)
+    parser.add_argument(
+        "--all_interactions",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     parser.add_argument(
         "--selection_config", type=Path, default=DEFAULT_SELECTION_CONFIG
     )
@@ -53,21 +58,22 @@ def eval_one(
 ) -> dict:
     validate_render_selection(interaction_name, args.output_mode, args.selection_config)
     render_root = genzi_eval_root(args.output_mode) / interaction_name / "semantics"
-    output_base = (
-        Path(args.output_root).resolve()
-        if args.output_root
-        else genzi_eval_root(args.output_mode)
+    output_root = Path(args.output_root).resolve() if args.output_root else render_root
+    shim = argparse.Namespace(
+        output_mode=args.output_mode,
+        input_scene_json=str(
+            PROJECT_DIR
+            / "01_Generate_SIG"
+            / "input_prompts"
+            / interaction_name
+            / "input_scene.json"
+        ),
+        render_root=str(render_root),
+        output_root=str(output_root),
     )
-    output_root = output_base / interaction_name / "semantics"
     return BASE.evaluate_interaction_semantics(
         interaction_name=interaction_name,
-        input_scene_json_path=PROJECT_DIR
-        / "01_Generate_SIG"
-        / "input_prompts"
-        / interaction_name
-        / "input_scene.json",
-        render_root=render_root,
-        output_root=output_root,
+        args=shim,
         model=model,
         processor=processor,
         device=device,
@@ -76,8 +82,12 @@ def eval_one(
 
 def main() -> None:
     args = parse_args()
-    all_mode = args.interaction_name == "all"
+    all_mode = bool(args.all_interactions) or args.interaction_name == "all"
     if all_mode:
+        if args.output_root is not None:
+            raise ValueError(
+                "--all_interactions cannot be combined with --output_root."
+            )
         names = discover_genzi_interactions(args.output_mode, args.selection_config)
     else:
         names = [args.interaction_name]
@@ -90,11 +100,7 @@ def main() -> None:
     rows = [eval_one(name, args, model, processor, device) for name in names]
 
     if all_mode:
-        root = ensure_dir(
-            Path(args.output_root).resolve()
-            if args.output_root
-            else genzi_eval_root(args.output_mode)
-        )
+        root = ensure_dir(genzi_eval_root(args.output_mode))
         mean_score = sum(float(row["clip_score"]) for row in rows) / len(rows)
         combined_rows = rows + [
             {

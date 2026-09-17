@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import base64
-from contextlib import ExitStack
 import json
+import re
 import shutil
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -12,8 +12,11 @@ from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parent
+LEGACY_CONTACT_DIR = PROJECT_DIR / "03_Estimate_Contact"
+if str(LEGACY_CONTACT_DIR) not in sys.path:
+    sys.path.insert(0, str(LEGACY_CONTACT_DIR))
 
-from common import (
+from common import (  # noqa: E402
     adjusted_intrinsics_for_crop,
     bbox_from_mask,
     build_contact_prompt,
@@ -35,6 +38,7 @@ from common import (
     normalize_scene_element,
     normalize_overlay_to_canvas,
     pad_bbox,
+    read_api_key,
     resolve_scannet_root,
     resolve_transforms_path,
     run_sam3_text_prompt,
@@ -53,8 +57,8 @@ from common import (
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Agentic contact mask estimation with GPT Image 2 generation "
-            "and Gemini evaluation."
+            "Agentic human-in-the-loop contact mask estimation with manual "
+            "ChatGPT image generation and Gemini VLM feedback."
         ),
     )
     parser.add_argument("--interaction_name", default="interaction_01")
@@ -66,21 +70,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--scannet-root", default=None)
     parser.add_argument("--system-prompt", default=None)
     parser.add_argument("--vlm-prompt", default=None)
-    parser.add_argument("--max-rounds", type=int, default=10)
+    parser.add_argument("--max-rounds", type=int, default=5)
     parser.add_argument(
         "--api-key-file",
         default=str(PROJECT_DIR / ".secrets" / "gemini_api_key"),
     )
-    parser.add_argument("--eval-model", default="gemini-3.7-flash")
-    parser.add_argument(
-        "--openai-api-key-file",
-        default=str(PROJECT_DIR / ".secrets" / "openai_api_key"),
-    )
-    parser.add_argument("--image-model", default="gpt-image-2")
-    parser.add_argument("--image-quality", default="medium")
-    parser.add_argument("--image-size", default="auto")
-    parser.add_argument("--image-retries", type=int, default=3)
-    parser.add_argument("--image-retry-sleep-s", type=float, default=8.0)
+    parser.add_argument("--model", default="gemini-3.1-flash-lite")
     parser.add_argument("--max-output-tokens", type=int, default=2048)
     parser.add_argument("--gemini-retries", type=int, default=3)
     parser.add_argument("--gemini-retry-sleep-s", type=float, default=8.0)
@@ -97,21 +92,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--floor-mask-erode-pixels", type=int, default=3)
     parser.add_argument("--sam3-checkpoint", default=None)
     parser.add_argument("--sam3-bpe-path", default=None)
-    parser.add_argument(
-        "--sam3-device",
-        default="auto",
-        help="SAM3 device. Use 'auto' to choose cuda when torch reports it.",
-    )
+    parser.add_argument("--sam3-device", default=get_default_sam3_device())
     parser.add_argument("--sam3-confidence-threshold", type=float, default=0.5)
     parser.add_argument("--no-sam3-hf-download", action="store_true")
     parser.add_argument("--color-max-distance", type=float, default=90.0)
     parser.add_argument("--min-component-area", type=int, default=0)
     parser.add_argument("--keep-components", type=int, default=1)
-    parser.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="Rebuild prepared assets and regenerate contact overlays from round 1.",
-    )
+    parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument("--allow-unaccepted", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -175,7 +164,22 @@ def resolve_paths(args: argparse.Namespace) -> dict[str, Path]:
 
 
 def target_object_label(sig_payload: dict[str, Any]) -> str:
-    return ", ".join(obj["label"] for obj in sig_payload["target_objects"])
+    labels: list[str] = []
+    target_objects = sig_payload.get("target_objects")
+    if isinstance(target_objects, list):
+        for target_object in target_objects:
+            if isinstance(target_object, dict):
+                label = str(target_object.get("label", "")).strip()
+                if label:
+                    labels.append(label)
+    if labels:
+        return ", ".join(labels)
+    target_object = sig_payload.get("target_object")
+    if isinstance(target_object, dict):
+        label = str(target_object.get("label", "")).strip()
+        if label:
+            return label
+    return "target object"
 
 
 def color_mapping_text(palette: list[dict[str, Any]]) -> str:
@@ -196,17 +200,26 @@ def required_contact_facts_text(
     palette: list[dict[str, Any]],
 ) -> str:
     notes_by_part: dict[str, list[str]] = {}
-    for edge in sig_payload["interaction_edges"]:
-        scene_element = normalize_scene_element(edge["scene_element"])
+    for edge in sig_payload.get("interaction_edges", []):
+        if not isinstance(edge, dict):
+            continue
+        scene_element = normalize_scene_element(
+            str(edge.get("scene_element", ""))
+        )
         if scene_element != "target_object":
             continue
-        part = edge["human_part"]
+        part = normalize_label(str(edge.get("human_part", "")))
+        if not part:
+            continue
         note = str(edge.get("notes", "")).strip()
         notes_by_part.setdefault(part, [])
         if note:
             notes_by_part[part].append(note)
 
-    palette_by_part = {normalize_label(str(item["part"])): item for item in palette}
+    palette_by_part = {
+        normalize_label(str(item["part"])): item
+        for item in palette
+    }
     lines: list[str] = []
     for part in human_parts:
         normalized = normalize_label(part)
@@ -224,13 +237,24 @@ def required_contact_facts_text(
         notes = notes_by_part.get(normalized) or ["No SIG note provided."]
         lines.append(
             f"- {label}: required contact with target object "
-            f"'{target_label}'. Use {color_text}. SIG note: " + " ".join(notes)
+            f"'{target_label}'. Use {color_text}. SIG note: "
+            + " ".join(notes)
         )
 
     interaction = str(sig_payload.get("interaction", "")).strip()
     if interaction:
         lines.append(f"- Interaction description: {interaction}")
     return "\n".join(lines)
+
+
+def remove_required_contacts_from_prompt(prompt: str) -> str:
+    section_header = "Required target-object contacts from SIG:"
+    marker = "\n\n" + section_header
+    if marker in prompt:
+        return prompt.split(marker, 1)[0].rstrip()
+    if prompt.lstrip().startswith(section_header):
+        return ""
+    return prompt.rstrip()
 
 
 def add_required_contacts_to_prompt(
@@ -306,24 +330,6 @@ def open_rgb_image(path: Path) -> Any:
     return Image.open(path).convert("RGB")
 
 
-def read_provider_api_key(path: Path, provider_name: str) -> str:
-    if not path.exists():
-        raise FileNotFoundError(
-            f"{provider_name} API key file not found: {path}. "
-            "Create it with a single API key line."
-        )
-    key = path.read_text(encoding="utf-8").strip()
-    if not key:
-        raise ValueError(f"{provider_name} API key file is empty: {path}")
-    return key
-
-
-def resolve_sam3_device(device: str) -> str:
-    if device != "auto":
-        return device
-    return get_default_sam3_device()
-
-
 def save_gemini_evaluation_artifact(
     artifact_path: Path,
     prompt: str,
@@ -340,31 +346,18 @@ def save_gemini_evaluation_artifact(
     save_text(artifact_path, text)
 
 
-def request_gemini(
-    client: Any,
-    *,
-    model: str,
-    contents: list[Any],
-    config: Any,
-    retries: int,
-    retry_sleep_s: float,
-) -> Any:
-    from google.genai import errors
-    from httpx import TransportError
-
-    attempts = max(1, retries)
-    for attempt in range(attempts):
-        try:
-            return client.models.generate_content(
-                model=model, contents=contents, config=config
-            )
-        except (errors.APIError, TransportError) as exc:
-            if isinstance(exc, errors.APIError) and exc.code != 429 and exc.code < 500:
-                raise
-            if attempt + 1 == attempts:
-                raise
-            print(f"Gemini request failed ({attempt + 1}/{attempts}): {exc}")
-            time.sleep(max(0.0, retry_sleep_s))
+def response_chunk_text(chunk: Any) -> str:
+    text = getattr(chunk, "text", None)
+    if isinstance(text, str):
+        return text
+    parts = []
+    for candidate in getattr(chunk, "candidates", []) or []:
+        content = getattr(candidate, "content", None)
+        for part in getattr(content, "parts", []) or []:
+            part_text = getattr(part, "text", None)
+            if isinstance(part_text, str):
+                parts.append(part_text)
+    return "".join(parts)
 
 
 def gemini_generate_json(
@@ -376,42 +369,56 @@ def gemini_generate_json(
     seed: int,
     max_output_tokens: int,
     artifact_path: Path,
-    retries: int,
-    retry_sleep_s: float,
 ) -> str:
     from google import genai
     from google.genai import types
 
-    config = types.GenerateContentConfig(
-        temperature=temperature,
-        seed=seed,
-        max_output_tokens=max_output_tokens,
-        response_mime_type="application/json",
-        response_schema={
-            "type": "object",
-            "properties": {
-                "done": {"type": "boolean"},
-                "correction_instruction": {"type": "string"},
-            },
-            "required": ["done", "correction_instruction"],
-        },
-    )
-    with genai.Client(api_key=api_key) as client:
-        response = request_gemini(
-            client,
-            model=model,
-            contents=[user_prompt] + [open_rgb_image(path) for path in image_paths],
-            config=config,
-            retries=retries,
-            retry_sleep_s=retry_sleep_s,
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    content_chunks: list[str] = []
+
+    def write_accumulated() -> None:
+        save_gemini_evaluation_artifact(
+            artifact_path=artifact_path,
+            prompt=user_prompt,
+            raw_response="".join(content_chunks),
         )
-    content = response.text or ""
-    save_gemini_evaluation_artifact(artifact_path, user_prompt, content)
-    return content
+
+    client = genai.Client(api_key=api_key)
+    config = types.GenerateContentConfig(
+        temperature=float(temperature),
+        seed=int(seed),
+        maxOutputTokens=int(max_output_tokens),
+        responseMimeType="application/json",
+    )
+    contents = [user_prompt] + [open_rgb_image(path) for path in image_paths]
+    write_accumulated()
+    for chunk in client.models.generate_content_stream(
+        model=model,
+        contents=contents,
+        config=config,
+    ):
+        text = response_chunk_text(chunk)
+        if text:
+            content_chunks.append(text)
+            write_accumulated()
+
+    content = "".join(content_chunks)
+    if not content.strip():
+        raise RuntimeError(
+            "Gemini response did not contain text content. Evaluation artifact: "
+            f"{artifact_path}."
+        )
+    return content.strip()
 
 
 def parse_json_response(raw_response: str) -> dict[str, Any]:
-    parsed = json.loads(raw_response)
+    try:
+        parsed = json.loads(raw_response)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", raw_response, flags=re.DOTALL)
+        if match is None:
+            raise
+        parsed = json.loads(match.group(0))
     if not isinstance(parsed, dict):
         raise ValueError("VLM response JSON must be an object.")
     return parsed
@@ -430,18 +437,7 @@ def render_vlm_prompt(
     )
 
 
-def validate_vlm_evaluation(parsed: dict[str, Any]) -> dict[str, Any]:
-    if type(parsed["done"]) is not bool:
-        raise ValueError("VLM done must be a JSON boolean.")
-    if not isinstance(parsed["correction_instruction"], str):
-        raise ValueError("VLM correction_instruction must be a string.")
-    return {
-        "done": parsed["done"],
-        "correction_instruction": parsed["correction_instruction"].strip(),
-    }
-
-
-def evaluate_round_gemini(
+def evaluate_round(
     args: argparse.Namespace,
     api_key: str,
     vlm_prompt_template: str,
@@ -452,7 +448,7 @@ def evaluate_round_gemini(
     canvas_path: Path,
     composite_path: Path,
     artifact_path: Path,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], str]:
     image_paths = [reference_path, canvas_path, composite_path]
     prompt = render_vlm_prompt(
         vlm_prompt_template,
@@ -462,19 +458,31 @@ def evaluate_round_gemini(
     )
     raw_response = gemini_generate_json(
         api_key=api_key,
-        model=args.eval_model,
+        model=args.model,
         user_prompt=prompt,
         image_paths=image_paths,
         temperature=float(args.temperature),
         seed=int(args.seed),
         max_output_tokens=int(args.max_output_tokens),
         artifact_path=artifact_path,
-        retries=args.gemini_retries,
-        retry_sleep_s=args.gemini_retry_sleep_s,
     )
     parsed = parse_json_response(raw_response)
-    return validate_vlm_evaluation(parsed)
-
+    if "done" not in parsed:
+        parsed["done"] = False
+    if "correction_instruction" not in parsed:
+        parsed["correction_instruction"] = ""
+    parsed = {
+        "done": bool(parsed["done"]),
+        "correction_instruction": str(
+            parsed["correction_instruction"]
+        ).strip(),
+    }
+    save_gemini_evaluation_artifact(
+        artifact_path=artifact_path,
+        prompt=prompt,
+        raw_response=raw_response,
+    )
+    return parsed, raw_response
 
 
 def prepare_assets(
@@ -511,7 +519,12 @@ def prepare_assets(
             human_parts=human_parts,
             palette=palette,
         )
-        base_prompt = base_prompt_path.read_text(encoding="utf-8")
+        base_prompt = render_generation_prompt(
+            template=paths["system_prompt"].read_text(encoding="utf-8"),
+            human_parts=human_parts,
+            palette=palette,
+            required_contacts=required_contacts,
+        )
         return {
             "sig_payload": sig_payload,
             "target_label": target_label,
@@ -558,7 +571,7 @@ def prepare_assets(
         bpe_path=(
             Path(args.sam3_bpe_path).resolve() if args.sam3_bpe_path else None
         ),
-        device=resolve_sam3_device(str(args.sam3_device)),
+        device=args.sam3_device,
         confidence_threshold=args.sam3_confidence_threshold,
         allow_hf_download=not args.no_sam3_hf_download,
     )
@@ -705,7 +718,10 @@ def write_round_prompt_package(
     shutil.copy2(reference_path, reference_copy)
     shutil.copy2(canvas_path, canvas_copy)
 
-    if previous_composite_path is not None:
+    if (
+        previous_composite_path is not None
+        and previous_composite_path.exists()
+    ):
         previous_copy = prompt_dir / "03_previous_composite.png"
         shutil.copy2(previous_composite_path, previous_copy)
     else:
@@ -719,89 +735,29 @@ def write_round_prompt_package(
     return prompt_path
 
 
-def verify_generated_image(generated_path: Path) -> None:
+def wait_for_generated_image(generated_path: Path) -> bool:
     from PIL import Image
 
-    if not generated_path.exists():
-        raise FileNotFoundError(f"Generated image not found: {generated_path}")
-    try:
-        with Image.open(generated_path) as image:
-            image.verify()
-    except Exception as exc:
-        raise RuntimeError(
-            f"Generated image is not readable ({exc}): {generated_path}"
-        ) from exc
-
-
-def run_openai_image_edit_once(
-    client: Any,
-    model: str,
-    quality: str,
-    size: str,
-    prompt: str,
-    image_paths: list[Path],
-    output_path: Path,
-) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with ExitStack() as stack:
-        images = [stack.enter_context(path.open("rb")) for path in image_paths]
-        response = client.images.edit(
-            model=model,
-            image=images,
-            prompt=prompt,
-            quality=quality,
-            size=size,
-            output_format="png",
-        )
-    image_b64 = response.data[0].b64_json
-    if not image_b64:
-        raise RuntimeError("OpenAI image edit returned no image data.")
-    output_path.write_bytes(base64.b64decode(image_b64))
-    verify_generated_image(output_path)
-
-
-def run_openai_image_edit(
-    args: argparse.Namespace,
-    api_key: str,
-    prompt: str,
-    canvas_path: Path,
-    reference_path: Path,
-    previous_composite_path: Path | None,
-    output_path: Path,
-    prompt_artifact_path: Path,
-) -> None:
-    from openai import OpenAI, APIConnectionError, APIStatusError
-
-    image_paths = [reference_path, canvas_path]
-    if previous_composite_path is not None:
-        image_paths.append(previous_composite_path)
-    prompt = prompt.rstrip() + "\n"
-    save_text(prompt_artifact_path, prompt)
-    attempts = max(1, args.image_retries)
-    with OpenAI(api_key=api_key, max_retries=0) as client:
-        for attempt in range(attempts):
-            try:
-                run_openai_image_edit_once(
-                    client=client,
-                    model=args.image_model,
-                    quality=args.image_quality,
-                    size=args.image_size,
-                    prompt=prompt,
-                    image_paths=image_paths,
-                    output_path=output_path,
-                )
-                return
-            except (APIConnectionError, APIStatusError) as exc:
-                if (
-                    isinstance(exc, APIStatusError)
-                    and exc.status_code not in {408, 409, 429}
-                    and exc.status_code < 500
-                ):
-                    raise
-                if attempt + 1 == attempts:
-                    raise
-                print(f"Image request failed ({attempt + 1}/{attempts}): {exc}")
-                time.sleep(max(0.0, args.image_retry_sleep_s))
+    while True:
+        response = input(
+            "\nSave the ChatGPT-generated image to:\n"
+            f"{generated_path}\n"
+            "Press Enter to run Gemini evaluation, or type 'a' to accept it "
+            "manually."
+        ).strip().lower()
+        if response not in {"", "a"}:
+            print("Unrecognized input. Press Enter or type 'a'.")
+            continue
+        if not generated_path.exists():
+            print(f"Generated image not found yet: {generated_path}")
+            continue
+        try:
+            with Image.open(generated_path) as image:
+                image.verify()
+        except Exception as exc:
+            print(f"Generated image is not readable ({exc}). Save it again.")
+            continue
+        return response == "a"
 
 
 def extract_contact_masks_from_overlay(
@@ -950,20 +906,10 @@ def publish_round_outputs(
 
 
 def run_agentic_loop(args: argparse.Namespace, assets: dict[str, Any]) -> int:
-    if args.max_rounds < 1:
-        raise ValueError("--max-rounds must be at least 1")
     output_root = resolve_paths(args)["output_root"]
     rounds_root = output_root / "rounds"
     rounds_root.mkdir(parents=True, exist_ok=True)
-    gemini_api_key = read_provider_api_key(
-        Path(args.api_key_file).resolve(),
-        "Gemini",
-    )
-    openai_api_key = read_provider_api_key(
-        Path(args.openai_api_key_file).resolve(),
-        "OpenAI",
-    )
-    evaluator_model = str(args.eval_model)
+    api_key = read_api_key(Path(args.api_key_file).resolve())
 
     base_prompt = str(assets["base_prompt"])
     vlm_prompt_template = str(assets["vlm_prompt_template"])
@@ -975,19 +921,29 @@ def run_agentic_loop(args: argparse.Namespace, assets: dict[str, Any]) -> int:
     canvas_path = Path(assets["canvas_crop_path"])
     floor_mask_path = Path(assets["floor_mask_crop_path"])
     correction_instruction: str | None = None
+    latest_summary: dict[str, Any] | None = None
+    latest_masks_by_part: list[tuple[str, Any]] | None = None
+    latest_composite_path: Path | None = None
 
     for round_index in range(1, int(args.max_rounds) + 1):
         round_dir = rounds_root / f"round_{round_index:02d}"
         round_dir.mkdir(parents=True, exist_ok=True)
         round_prompt_dir = round_dir / "prompt"
         generated_path = round_dir / "generated_contact_overlay.png"
-        resized_overlay_path = round_dir / "generated_contact_overlay_resized.png"
+        resized_overlay_path = (
+            round_dir / "generated_contact_overlay_resized.png"
+        )
         composite_path = round_dir / "composite.png"
-        openai_prompt_artifact_path = round_dir / "openai_generation.txt"
-        evaluation_artifact_path = round_dir / "gemini_evaluation.txt"
+        gemini_artifact_path = round_dir / "gemini_evaluation.txt"
+        stale_gemini_json_path = round_dir / "gemini_evaluation.json"
+        legacy_raw_response_path = round_dir / "gemini_raw_response.txt"
         stale_round_masks_dir = round_dir / "contact_masks"
         if stale_round_masks_dir.exists():
             shutil.rmtree(stale_round_masks_dir)
+        if stale_gemini_json_path.exists():
+            stale_gemini_json_path.unlink()
+        if legacy_raw_response_path.exists():
+            legacy_raw_response_path.unlink()
 
         prompt = build_round_prompt(base_prompt, correction_instruction)
         previous_composite = (
@@ -1005,30 +961,15 @@ def run_agentic_loop(args: argparse.Namespace, assets: dict[str, Any]) -> int:
         print("\n" + "=" * 72)
         print(f"Round {round_index:02d}/{args.max_rounds}")
         print(f"Prompt: {prompt_path}")
-        print(f"OpenAI image 1: {round_prompt_dir / '01_reference_image.png'}")
-        print(f"OpenAI image 2: {round_prompt_dir / '02_canvas_image.png'}")
-        if previous_composite is not None:
-            print(f"OpenAI image 3: {round_prompt_dir / '03_previous_composite.png'}")
-        if generated_path.exists() and not args.overwrite:
+        print(f"Upload image 1: {round_prompt_dir / '01_reference_image.png'}")
+        print(f"Upload image 2: {round_prompt_dir / '02_canvas_image.png'}")
+        if previous_composite is not None and previous_composite.exists():
             print(
-                "Skipping OpenAI image edit; found existing generated "
-                f"overlay: {generated_path}"
+                "Upload image 3: "
+                f"{round_prompt_dir / '03_previous_composite.png'}"
             )
-            verify_generated_image(generated_path)
-        else:
-            if generated_path.exists():
-                print(f"Overwriting generated overlay: {generated_path}")
-            run_openai_image_edit(
-                args=args,
-                api_key=openai_api_key,
-                prompt=prompt_path.read_text(encoding="utf-8"),
-                canvas_path=canvas_path,
-                reference_path=reference_path,
-                previous_composite_path=previous_composite,
-                output_path=generated_path,
-                prompt_artifact_path=openai_prompt_artifact_path,
-            )
-            print(f"Wrote OpenAI generated overlay: {generated_path}")
+        print(f"Save ChatGPT result as: {generated_path}")
+        manual_accept = wait_for_generated_image(generated_path)
 
         contact_masks = extract_contact_masks_from_overlay(
             overlay_path=generated_path,
@@ -1047,37 +988,98 @@ def run_agentic_loop(args: argparse.Namespace, assets: dict[str, Any]) -> int:
             output_path=composite_path,
         )
 
+        if manual_accept:
+            latest_composite_path = composite_path
+            latest_masks_by_part = contact_masks
+            latest_summary = {
+                "interaction_name": args.interaction_name,
+                "done": True,
+                "accepted_round": round_index,
+                "latest_round": round_index,
+                "max_rounds": int(args.max_rounds),
+                "provider": "manual",
+                "model": None,
+                "target_object": assets["target_label"],
+                "human_parts": human_parts,
+                "floor_parts": floor_parts,
+                "palette": palette,
+                "required_contacts": required_contacts,
+                "composite_includes_floor_contacts": False,
+                "reference_crop": str(reference_path),
+                "canvas_crop": str(canvas_path),
+                "contact_spec": str(assets["contact_spec_path"]),
+                "vlm_prompt": str(assets["vlm_prompt_path"]),
+                "latest_evaluation": {
+                    "done": True,
+                    "correction_instruction": "",
+                    "manual_accept": True,
+                },
+            }
+            publish_round_outputs(
+                output_root=output_root,
+                composite_path=composite_path,
+                canvas_path=canvas_path,
+                masks_by_part=contact_masks,
+                palette=palette,
+                floor_parts=floor_parts,
+                floor_mask_path=floor_mask_path,
+                color_max_distance=float(args.color_max_distance),
+                min_component_area=int(args.min_component_area),
+                keep_components=int(args.keep_components),
+                summary=latest_summary,
+            )
+            print(f"Manually accepted contact masks at round {round_index:02d}.")
+            return 0
+
         print(f"Composite for VLM evaluation: {composite_path}")
-        evaluation = evaluate_round_gemini(
-            args=args,
-            api_key=gemini_api_key,
-            vlm_prompt_template=vlm_prompt_template,
-            target_label=assets["target_label"],
-            palette=palette,
-            required_contacts=required_contacts,
-            reference_path=reference_path,
-            canvas_path=canvas_path,
-            composite_path=composite_path,
-            artifact_path=evaluation_artifact_path,
-        )
+        evaluation = None
+        raw_response = None
+        max_attempts = max(1, int(args.gemini_retries))
+        for attempt_index in range(1, max_attempts + 1):
+            print(
+                f"Gemini evaluation attempt {attempt_index}/{max_attempts}; "
+                f"artifact: {gemini_artifact_path}"
+            )
+            try:
+                evaluation, raw_response = evaluate_round(
+                    args=args,
+                    api_key=api_key,
+                    vlm_prompt_template=vlm_prompt_template,
+                    target_label=str(assets["target_label"]),
+                    palette=palette,
+                    required_contacts=required_contacts,
+                    reference_path=reference_path,
+                    canvas_path=canvas_path,
+                    composite_path=composite_path,
+                    artifact_path=gemini_artifact_path,
+                )
+                break
+            except Exception as exc:
+                print(
+                    "Gemini evaluation attempt failed: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                if attempt_index >= max_attempts:
+                    raise
+                sleep_s = max(0.0, float(args.gemini_retry_sleep_s))
+                print(f"Retrying Gemini evaluation in {sleep_s:.1f}s...")
+                time.sleep(sleep_s)
+        if evaluation is None or raw_response is None:
+            raise RuntimeError("Gemini evaluation did not produce a response.")
         print(f"VLM result: done={evaluation['done']}")
         if evaluation["correction_instruction"]:
             print(f"Correction: {evaluation['correction_instruction']}")
 
-        summary = {
+        latest_composite_path = composite_path
+        latest_masks_by_part = contact_masks
+        latest_summary = {
             "interaction_name": args.interaction_name,
             "done": bool(evaluation["done"]),
             "accepted_round": round_index if evaluation["done"] else None,
             "latest_round": round_index,
             "max_rounds": int(args.max_rounds),
             "provider": "gemini",
-            "model": evaluator_model,
-            "image_provider": "openai",
-            "image_model": args.image_model,
-            "image_quality": args.image_quality,
-            "image_size": args.image_size,
-            "evaluator_provider": "gemini",
-            "evaluator_model": evaluator_model,
+            "model": args.model,
             "target_object": assets["target_label"],
             "human_parts": human_parts,
             "floor_parts": floor_parts,
@@ -1092,45 +1094,70 @@ def run_agentic_loop(args: argparse.Namespace, assets: dict[str, Any]) -> int:
         }
 
         if evaluation["done"]:
+            publish_round_outputs(
+                output_root=output_root,
+                composite_path=composite_path,
+                canvas_path=canvas_path,
+                masks_by_part=contact_masks,
+                palette=palette,
+                floor_parts=floor_parts,
+                floor_mask_path=floor_mask_path,
+                color_max_distance=float(args.color_max_distance),
+                min_component_area=int(args.min_component_area),
+                keep_components=int(args.keep_components),
+                summary=latest_summary,
+            )
             print(f"Accepted contact masks at round {round_index:02d}.")
-            break
+            return 0
         correction_instruction = evaluation["correction_instruction"] or (
             "The previous result was not accepted. Improve the colored "
             "contact "
             "mask locations and sizes while preserving the original canvas."
         )
 
-    if not evaluation["done"]:
-        summary["stopped_reason"] = "max_rounds_reached"
-        print(f"Reached max rounds ({args.max_rounds}) without VLM acceptance.")
-    publish_round_outputs(
-        output_root=output_root,
-        composite_path=composite_path,
-        canvas_path=canvas_path,
-        masks_by_part=contact_masks,
-        palette=palette,
-        floor_parts=floor_parts,
-        floor_mask_path=floor_mask_path,
-        color_max_distance=args.color_max_distance,
-        min_component_area=args.min_component_area,
-        keep_components=args.keep_components,
-        summary=summary,
-    )
-    return 0 if evaluation["done"] else 1
-
+    if (
+        latest_summary is not None
+        and latest_composite_path is not None
+        and latest_masks_by_part is not None
+    ):
+        latest_summary["done"] = False
+        latest_summary["accepted_round"] = None
+        latest_summary["stopped_reason"] = "max_rounds_reached"
+        publish_round_outputs(
+            output_root=output_root,
+            composite_path=latest_composite_path,
+            canvas_path=canvas_path,
+            masks_by_part=latest_masks_by_part,
+            palette=palette,
+            floor_parts=floor_parts,
+            floor_mask_path=floor_mask_path,
+            color_max_distance=float(args.color_max_distance),
+            min_component_area=int(args.min_component_area),
+            keep_components=int(args.keep_components),
+            summary=latest_summary,
+        )
+    print(f"Reached max rounds ({args.max_rounds}) without VLM acceptance.")
+    return 0 if args.allow_unaccepted else 1
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if int(args.max_rounds) < 1:
+        raise ValueError("--max-rounds must be at least 1")
     paths = resolve_paths(args)
     assets = prepare_assets(args, paths)
     print(f"Wrote/loaded reference crop: {assets['reference_crop_path']}")
     print(f"Wrote/loaded canvas crop: {assets['canvas_crop_path']}")
     if assets["floor_parts"]:
-        print(f"Wrote/loaded floor mask crop: {assets['floor_mask_crop_path']}")
+        print(
+            "Wrote/loaded floor mask crop: "
+            f"{assets['floor_mask_crop_path']}"
+        )
     print(f"Wrote/loaded contact spec: {assets['contact_spec_path']}")
     print(f"Wrote/loaded base prompt: {assets['base_prompt_path']}")
     print(f"Loaded VLM prompt: {assets['vlm_prompt_path']}")
+    if args.prepare_only:
+        return 0
     return run_agentic_loop(args, assets)
 
 

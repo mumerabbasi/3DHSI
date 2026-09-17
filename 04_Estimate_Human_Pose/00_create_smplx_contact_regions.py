@@ -723,7 +723,7 @@ def build_blender_env(gpu_index: str | None) -> dict[str, str]:
 
 def write_blender_driver(path: Path) -> None:
     path.write_text(
-        r"""
+        r'''
 import json
 import math
 import sys
@@ -735,7 +735,10 @@ from mathutils import Matrix, Vector
 
 def import_ply(path):
     before = set(bpy.context.scene.objects)
-    bpy.ops.wm.ply_import(filepath=str(path))
+    if hasattr(bpy.ops.wm, "ply_import"):
+        bpy.ops.wm.ply_import(filepath=str(path))
+    else:
+        bpy.ops.import_mesh.ply(filepath=str(path))
     after = set(bpy.context.scene.objects)
     new_objects = list(after - before)
     if not new_objects:
@@ -975,7 +978,7 @@ for name, direction in views:
     bpy.context.scene.render.resolution_y = height
     bpy.context.scene.render.filepath = config["render_paths"][name]
     bpy.ops.render.render(write_still=True)
-""".lstrip(),
+'''.lstrip(),
         encoding="utf-8",
     )
 

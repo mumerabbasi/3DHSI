@@ -79,13 +79,35 @@ class IdentityCameraContext:
 
 
 @dataclass
+class InteractionNode:
+    raw_node: str
+    entity_name: str
+    part_name: str
+    is_human: bool
+
+
+@dataclass
+class InteractionEdge:
+    node_a: InteractionNode
+    node_b: InteractionNode
+
+
+@dataclass
 class SmplxSegmentCatalog:
     vertex_count: int
     segments: dict[str, np.ndarray]
     contact_segment_ids: list[str]
 
     def get_indices(self, segment_id: str) -> np.ndarray:
-        return self.segments[segment_id]
+        indices = self.segments.get(segment_id)
+        if indices is None:
+            raise KeyError(f"Unknown SMPL-X segment id '{segment_id}'.")
+        return indices
+
+    def get_display_name(self, segment_id: str) -> str:
+        if segment_id not in self.segments:
+            raise KeyError(f"Unknown SMPL-X segment id '{segment_id}'.")
+        return segment_id.replace("_", " ")
 
     def get_contact_segment_id(self, sig_part_name: str) -> str:
         body_segment_id = slugify_segment_name(sig_part_name)
@@ -93,6 +115,9 @@ class SmplxSegmentCatalog:
         if segment_id is None or segment_id not in self.contact_segment_ids:
             raise KeyError(f"Missing contact segment mapping for '{sig_part_name}'.")
         return segment_id
+
+    def get_contact_or_body_segment_id(self, sig_part_name: str) -> str:
+        return self.get_contact_segment_id(sig_part_name)
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -132,8 +157,18 @@ def normalize_label(text: str) -> str:
     )
 
 
-def normalize_scene_element(text: str) -> str:
-    return "target_object" if text in {"target_object_1", "target_object_2"} else text
+def normalize_scene_element(text: str, target_labels: set[str] | None = None) -> str:
+    raw = str(text).strip().lower()
+    normalized = normalize_label(text)
+    labels = target_labels or set()
+    if (
+        raw == "target_object"
+        or raw.startswith("target_object_")
+        or normalized in {"target object", "object", "target object 1", "target object 2"}
+        or normalized in labels
+    ):
+        return "target_object"
+    return normalized
 
 
 def slugify_segment_name(text: str) -> str:
@@ -141,7 +176,20 @@ def slugify_segment_name(text: str) -> str:
 
 
 def resolve_sig_target_label(sig_payload: dict[str, Any]) -> str:
-    return sig_payload["target_objects"][0]["label"]
+    target_objects = sig_payload.get("target_objects")
+    if isinstance(target_objects, list) and target_objects:
+        first_target = target_objects[0]
+        if isinstance(first_target, dict):
+            label = str(first_target.get("label", "")).strip()
+            if label:
+                return label
+    target_object = sig_payload.get("target_object", {})
+    if not isinstance(target_object, dict):
+        raise ValueError("SIG must contain target_objects.")
+    label = str(target_object.get("label", "")).strip()
+    if label:
+        return label
+    raise ValueError("SIG target_object.label must be non-empty.")
 
 
 def resolve_scannet_root(
@@ -478,14 +526,19 @@ def save_loss_plot_tree(
 
 
 def iter_sig_interactions(sig_payload: dict[str, Any]) -> list[dict[str, Any]]:
-    return [
-        {
-            **edge,
-            "body_part": edge["human_part"],
-            "scene_element": normalize_scene_element(edge["scene_element"]),
-        }
-        for edge in sig_payload["interaction_edges"]
-    ]
+    interactions = sig_payload.get("interaction_edges", [])
+    if not isinstance(interactions, list):
+        raise ValueError("SIG must contain a list field named 'interaction_edges'.")
+    edges: list[dict[str, Any]] = []
+    for interaction in interactions:
+        if not isinstance(interaction, dict):
+            continue
+        body_part = normalize_label(str(interaction.get("human_part", "")))
+        scene_element = normalize_scene_element(str(interaction.get("scene_element", "")))
+        if not body_part or not scene_element:
+            continue
+        edges.append({**interaction, "body_part": body_part, "scene_element": scene_element})
+    return edges
 
 
 def load_smpl_segment_catalog(seg_path: Path) -> SmplxSegmentCatalog:
@@ -535,8 +588,15 @@ def load_smpl_segment_catalog(seg_path: Path) -> SmplxSegmentCatalog:
     )
 
 
-def contact_reduction(part_name: str) -> str:
-    return "mean" if part_name.split()[-1] in {"hand", "foot", "hips"} else "min"
+def _get_reduction(nodes: tuple[InteractionNode, InteractionNode]) -> str:
+    for node in nodes:
+        if node.is_human and node.part_name.split(" ")[-1] in (
+            "hand",
+            "foot",
+            "hips",
+        ):
+            return "mean"
+    return "min"
 
 
 def pcd_distance(
@@ -864,9 +924,8 @@ def palette_color_for_edge(index: int) -> tuple[int, int, int]:
     return CONTACT_PALETTE_RGB[index % len(CONTACT_PALETTE_RGB)]
 
 
-def assign_interaction_palette_indices(
-    interaction_edges: list[ContactConstraint],
-) -> None:
+def assign_interaction_palette_indices(interaction_edges: list[DynamicInteractionEdge]) -> None:
+    used_indices: set[int] = set()
     for edge in interaction_edges:
         part_key = slugify_segment_name(edge.moving_part_name)
         palette_index = CONTACT_PART_PALETTE_INDEX.get(
@@ -874,6 +933,7 @@ def assign_interaction_palette_indices(
             abs(hash(part_key)) % len(CONTACT_PALETTE_RGB),
         )
         edge.palette_index = int(palette_index)
+        used_indices.add(int(palette_index))
 
 
 def _edge_centroid(points: np.ndarray) -> np.ndarray:
@@ -881,8 +941,8 @@ def _edge_centroid(points: np.ndarray) -> np.ndarray:
 
 
 def _swap_fixed_region_assignment(
-    edge_a: ContactConstraint,
-    edge_b: ContactConstraint,
+    edge_a: DynamicInteractionEdge,
+    edge_b: DynamicInteractionEdge,
 ) -> None:
     (
         edge_a.fixed_points,
@@ -908,13 +968,13 @@ def _swap_fixed_region_assignment(
 
 
 def spatially_disambiguate_bilateral_interaction_edges(
-    interaction_edges: list[ContactConstraint],
+    interaction_edges: list[DynamicInteractionEdge],
     init_verts_camera: np.ndarray,
 ) -> None:
     if len(interaction_edges) < 2:
         return
 
-    edge_by_key: dict[tuple[str, str, str], ContactConstraint] = {}
+    edge_by_key: dict[tuple[str, str, str], DynamicInteractionEdge] = {}
     for edge in interaction_edges:
         part_tokens = normalize_label(edge.moving_part_name).split()
         if len(part_tokens) < 2 or part_tokens[0] not in {"left", "right"}:
@@ -922,7 +982,7 @@ def spatially_disambiguate_bilateral_interaction_edges(
         side = part_tokens[0]
         base_part = " ".join(part_tokens[1:])
         group_key = (
-            normalize_label(edge.scene_element),
+            normalize_label(edge.fixed_node.raw_node),
             base_part,
             side,
         )
@@ -942,8 +1002,12 @@ def spatially_disambiguate_bilateral_interaction_edges(
         if left_edge is None or right_edge is None:
             continue
 
-        left_moving = _edge_centroid(init_verts_camera[left_edge.moving_vertex_ids])
-        right_moving = _edge_centroid(init_verts_camera[right_edge.moving_vertex_ids])
+        left_moving = _edge_centroid(
+            init_verts_camera[left_edge.moving_vertex_ids]
+        )
+        right_moving = _edge_centroid(
+            init_verts_camera[right_edge.moving_vertex_ids]
+        )
         left_fixed = _edge_centroid(left_edge.fixed_points)
         right_fixed = _edge_centroid(right_edge.fixed_points)
 
@@ -1250,7 +1314,7 @@ def sample_scene_surface_points(
 
 def save_static_snapshot_references(
     snapshots_dir: Path,
-    interaction_edges: list[ContactConstraint],
+    interaction_edges: list[DynamicInteractionEdge],
     scene_verts_camera: np.ndarray,
     scene_faces_compact: np.ndarray,
     scene_vertex_source_ids: np.ndarray,
@@ -1271,6 +1335,8 @@ def save_static_snapshot_references(
     source_to_local[source_ids] = np.arange(source_ids.shape[0], dtype=np.int64)
 
     for edge in interaction_edges:
+        if edge.fixed_vertex_ids is None:
+            continue
         fixed_vertex_ids = np.asarray(edge.fixed_vertex_ids, dtype=np.int64)
         local_ids = source_to_local[
             fixed_vertex_ids[fixed_vertex_ids < source_to_local.shape[0]]
@@ -1292,7 +1358,7 @@ def save_human_iteration_snapshot(
     iter_idx: int,
     verts_camera: torch.Tensor,
     faces_np: np.ndarray,
-    interaction_edges: list[ContactConstraint],
+    interaction_edges: list[DynamicInteractionEdge],
     rotation_world_to_camera: np.ndarray,
     translation_world_to_camera: np.ndarray,
 ) -> None:
@@ -1319,15 +1385,19 @@ def save_human_iteration_snapshot(
 
 
 @dataclass
-class ContactConstraint:
+class DynamicInteractionEdge:
+    node_a: InteractionNode
+    node_b: InteractionNode
+    moving_node: InteractionNode
+    fixed_node: InteractionNode
     moving_part_name: str
     moving_segment_id: str
-    scene_element: str
+    moving_segment_name: str
     moving_vertex_ids: np.ndarray
     fixed_points: np.ndarray
-    fixed_face_ids: np.ndarray
-    fixed_vertex_ids: np.ndarray
     reduction: str
+    fixed_face_ids: np.ndarray | None = None
+    fixed_vertex_ids: np.ndarray | None = None
     palette_index: int = -1
 
 
@@ -1514,7 +1584,8 @@ def parse_args() -> argparse.Namespace:
         default=400,
         help=(
             "Number of initial iterations with body_pose and global orientation frozen. "
-            "Defaults to 400; must be smaller than adam_iters."
+            "Defaults to 40 percent of adam_iters, leaving at least one "
+            "pose-enabled iteration when possible."
         ),
     )
     parser.add_argument("--orient_gvhmr_weight", type=float, default=100.0)
@@ -1549,9 +1620,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scene_intersect_margin_m", type=float, default=0.00)
     parser.add_argument("--scene_intersect_surface_samples", type=int, default=700000)
     parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Export depth images, optimization snapshots, SDF diagnostics, and loss plots.",
+        "--scene_intersect_debug",
+        action=argparse.BooleanOptionalAction,
+        default=True,
     )
     parser.add_argument("--human_scene_depth_weight_start", type=float, default=0.0)
     parser.add_argument("--human_scene_depth_weight_end", type=float, default=0.0)
@@ -1560,15 +1631,11 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.03,
     )
-    parser.add_argument(
-        "--human_scene_depth_min_valid_weight", type=float, default=0.25
-    )
+    parser.add_argument("--human_scene_depth_min_valid_weight", type=float, default=0.25)
     parser.add_argument("--nocontact_weight_start", type=float, default=800.0)
     parser.add_argument("--nocontact_weight_end", type=float, default=800.0)
     parser.add_argument("--self_intersect_weight_start", type=float, default=1e-3)
-    parser.add_argument(
-        "--self_intersect_weight_end", type=float, default=1e-3
-    )  # Original 1e-3
+    parser.add_argument("--self_intersect_weight_end", type=float, default=1e-3)  # Original 1e-3
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--log_every", type=int, default=200)
     parser.add_argument("--contact_masks_dir", type=str, default=None)
@@ -1582,9 +1649,7 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.05,
     )
-    parser.add_argument(
-        "--contact_projection_min_component_pixels", type=int, default=16
-    )
+    parser.add_argument("--contact_projection_min_component_pixels", type=int, default=16)
     parser.add_argument(
         "--contact_projection_max_component_gap_px",
         type=float,
@@ -1636,6 +1701,7 @@ def build_loss_row(
     stage_name: str,
 ) -> dict[str, Any]:
     weights = losses["weights"]
+    assert isinstance(weights, dict)
     row: dict[str, Any] = {
         "iter": int(iteration),
         "stage": stage_name,
@@ -1646,10 +1712,14 @@ def build_loss_row(
         row[f"{key}_weight"] = float(weights[key])
         row[f"{key}_raw"] = raw_value
         row[f"{key}_scaled"] = float(weights[key]) * raw_value
-    for key, value in losses["scene_intersect_stats"].items():
-        row[f"scene_intersect_{key}"] = int(value)
-    for key, value in losses["human_scene_depth_stats"].items():
-        row[f"human_scene_depth_{key}"] = int(value)
+    scene_stats = losses.get("scene_intersect_stats", {})
+    if isinstance(scene_stats, dict):
+        for key, value in scene_stats.items():
+            row[f"scene_intersect_{key}"] = int(value)
+    depth_stats = losses.get("human_scene_depth_stats", {})
+    if isinstance(depth_stats, dict):
+        for key, value in depth_stats.items():
+            row[f"human_scene_depth_{key}"] = int(value)
     return row
 
 
@@ -1659,10 +1729,10 @@ def format_loss_log(
     losses: dict[str, Any],
 ) -> list[str]:
     weights = losses["weights"]
+    assert isinstance(weights, dict)
     weights_fmt = "  ".join(f"{key}={weights[key]:.4g}" for key in LOSS_TERM_KEYS)
     raw_fmt = "  ".join(
-        f"{key}={float(losses[key].detach().cpu().item()):.5f}"
-        for key in LOSS_TERM_KEYS
+        f"{key}={float(losses[key].detach().cpu().item()):.5f}" for key in LOSS_TERM_KEYS
     )
     scaled_fmt = "  ".join(
         f"{key}={weights[key] * float(losses[key].detach().cpu().item()):.5f}"
@@ -1682,6 +1752,7 @@ def build_final_loss_summary_row(
     losses: dict[str, Any],
 ) -> dict[str, Any]:
     weights = losses["weights"]
+    assert isinstance(weights, dict)
     row: dict[str, Any] = {
         "final_iter": int(final_iter),
         "final_total_loss": float(losses["total"].detach().cpu().item()),
@@ -1692,14 +1763,18 @@ def build_final_loss_summary_row(
         row[f"{key}_weight"] = float(weights[key])
         row[f"{key}_raw"] = raw_value
         row[f"{key}_scaled"] = float(weights[key]) * raw_value
-    for key, value in losses["scene_intersect_stats"].items():
-        row[f"scene_intersect_{key}"] = int(value)
-    for key, value in losses["human_scene_depth_stats"].items():
-        row[f"human_scene_depth_{key}"] = int(value)
+    scene_stats = losses.get("scene_intersect_stats", {})
+    if isinstance(scene_stats, dict):
+        for key, value in scene_stats.items():
+            row[f"scene_intersect_{key}"] = int(value)
+    depth_stats = losses.get("human_scene_depth_stats", {})
+    if isinstance(depth_stats, dict):
+        for key, value in depth_stats.items():
+            row[f"human_scene_depth_{key}"] = int(value)
     return row
 
 
-def build_contact_constraints(
+def build_dynamic_interaction_edges(
     sig_payload: dict[str, Any],
     target_object_name: str,
     segment_catalog: SmplxSegmentCatalog,
@@ -1715,14 +1790,20 @@ def build_contact_constraints(
     contact_projection_nearby_depth_m: float,
     contact_projection_min_component_pixels: int,
     contact_projection_max_component_gap_px: float,
-) -> list[ContactConstraint]:
+) -> list[DynamicInteractionEdge]:
+    target_object_norm = normalize_label(target_object_name)
     image_hw = (camera_ctx.height, camera_ctx.width)
-    interaction_edges: list[ContactConstraint] = []
+    interaction_edges: list[DynamicInteractionEdge] = []
     seen: set[tuple[str, str]] = set()
 
     for interaction in iter_sig_interactions(sig_payload):
-        moving_part_name = interaction["body_part"]
-        scene_element = interaction["scene_element"]
+        moving_part_name = normalize_label(str(interaction["body_part"]))
+        scene_element = normalize_scene_element(
+            str(interaction["scene_element"]),
+            {target_object_norm},
+        )
+        if scene_element not in {"target_object", "floor"}:
+            continue
 
         fixed_name = target_object_name if scene_element == "target_object" else "floor"
         dedup_key = (moving_part_name, scene_element)
@@ -1730,8 +1811,25 @@ def build_contact_constraints(
             continue
         seen.add(dedup_key)
 
-        moving_segment_id = segment_catalog.get_contact_segment_id(moving_part_name)
+        moving_node = InteractionNode(
+            raw_node=f"human.{moving_part_name.replace(' ', '_')}",
+            entity_name="human",
+            part_name=moving_part_name,
+            is_human=True,
+        )
+        fixed_node = InteractionNode(
+            raw_node=fixed_name,
+            entity_name=fixed_name,
+            part_name=fixed_name,
+            is_human=False,
+        )
+        moving_segment_id = segment_catalog.get_contact_or_body_segment_id(
+            moving_part_name
+        )
         part_vert_ids = segment_catalog.get_indices(moving_segment_id)
+        moving_segment_name = segment_catalog.get_display_name(
+            moving_segment_id
+        )
 
         contact_mask = load_contact_mask_for_part(
             contact_masks_dir,
@@ -1798,13 +1896,19 @@ def build_contact_constraints(
         )
 
         interaction_edges.append(
-            ContactConstraint(
-                scene_element=fixed_name,
+            DynamicInteractionEdge(
+                node_a=moving_node,
+                node_b=fixed_node,
+                moving_node=moving_node,
+                fixed_node=fixed_node,
                 moving_part_name=moving_part_name,
                 moving_segment_id=moving_segment_id,
-                moving_vertex_ids=np.unique(np.asarray(part_vert_ids, dtype=np.int64)),
+                moving_segment_name=moving_segment_name,
+                moving_vertex_ids=np.unique(
+                    np.asarray(part_vert_ids, dtype=np.int64)
+                ),
                 fixed_points=fixed_points_part,
-                reduction=contact_reduction(moving_part_name),
+                reduction=_get_reduction((moving_node, fixed_node)),
                 fixed_face_ids=fixed_face_ids,
                 fixed_vertex_ids=fixed_vertex_ids,
             )
@@ -1824,9 +1928,9 @@ def build_contact_constraints(
         rgb = palette_color_for_edge(int(edge.palette_index))
         print(
             f"  final correspondence '{edge.moving_part_name}' -> "
-            f"'{edge.scene_element}': "
+            f"'{edge.fixed_node.raw_node}': "
             f"human_vertices={edge.moving_vertex_ids.size} "
-            f"scene_vertices={int(edge.fixed_vertex_ids.size)} "
+            f"scene_vertices={0 if edge.fixed_vertex_ids is None else int(edge.fixed_vertex_ids.size)} "
             f"scene_surface_points={edge.fixed_points.shape[0]} "
             f"color_rgb={rgb}"
         )
@@ -1904,12 +2008,10 @@ def compute_orient_prior_loss(
 
 def compute_contact_distance_loss(
     current_vertices: torch.Tensor,
-    edges: list[ContactConstraint],
+    edges: list[DynamicInteractionEdge],
 ) -> torch.Tensor:
     if not edges:
-        raise RuntimeError(
-            "Contact distance loss requires at least one interaction edge."
-        )
+        raise RuntimeError("Contact distance loss requires at least one interaction edge.")
     values: list[torch.Tensor] = []
     for edge in edges:
         moving_points_seq = current_vertices[edge.moving_vertex_ids].unsqueeze(0)
@@ -1920,7 +2022,7 @@ def compute_contact_distance_loss(
         if fixed_points.shape[0] == 0:
             raise RuntimeError(
                 f"Interaction edge '{edge.moving_part_name}' -> "
-                f"'{edge.scene_element}' has no fixed scene points."
+                f"'{edge.fixed_node.raw_node}' has no fixed scene points."
             )
         fixed_points_seq = fixed_points.unsqueeze(0)
         pdists = pcd_distance(
@@ -1948,7 +2050,10 @@ def query_human_sdf_for_scene_points(
 
 
 def clear_smplx_volume_cache(smplx_layer: Any) -> None:
-    smplx_layer.volume.detach_cache()
+    volume = getattr(smplx_layer, "volume", None)
+    detach_cache = getattr(volume, "detach_cache", None)
+    if callable(detach_cache):
+        detach_cache()
 
 
 def compute_scene_inside_human_loss(
@@ -2260,7 +2365,7 @@ def compute_loss_dict(
     params_module: FullBodySMPLXParams,
     smplx_layer: Any,
     faces_t: torch.Tensor,
-    interaction_edges: list[ContactConstraint],
+    interaction_edges: list[DynamicInteractionEdge],
     scene_collision_points_t: torch.Tensor,
     scene_intersect_margin_m: float,
     scene_depth_t: torch.Tensor | None,
@@ -2346,21 +2451,17 @@ def compute_loss_dict(
 
 def compute_interaction_metrics(
     current_vertices: np.ndarray,
-    edges: list[ContactConstraint],
+    edges: list[DynamicInteractionEdge],
 ) -> list[dict[str, Any]]:
     metrics: list[dict[str, Any]] = []
     device = torch.device("cpu")
-    current_vertices_t = torch.from_numpy(current_vertices.astype(np.float32)).to(
-        device
-    )
+    current_vertices_t = torch.from_numpy(current_vertices.astype(np.float32)).to(device)
     for edge in edges:
-        fixed_points_t = torch.from_numpy(edge.fixed_points.astype(np.float32)).to(
-            device
-        )
+        fixed_points_t = torch.from_numpy(edge.fixed_points.astype(np.float32)).to(device)
         if fixed_points_t.shape[0] == 0:
             raise RuntimeError(
                 f"Cannot compute interaction metrics for "
-                f"'{edge.moving_part_name}' -> '{edge.scene_element}': "
+                f"'{edge.moving_part_name}' -> '{edge.fixed_node.raw_node}': "
                 "edge has no fixed scene points."
             )
         moving_points_t = current_vertices_t[edge.moving_vertex_ids].unsqueeze(0)
@@ -2373,15 +2474,15 @@ def compute_interaction_metrics(
         nocontact_raw = pdists.mean().detach().cpu().item()
         metrics.append(
             {
-                "node_a": f"human.{edge.moving_part_name.replace(' ', '_')}",
-                "node_b": edge.scene_element,
-                "moving_entity_name": "human",
-                "moving_part_name": edge.moving_part_name,
+                "node_a": edge.node_a.raw_node,
+                "node_b": edge.node_b.raw_node,
+                "moving_entity_name": edge.moving_node.entity_name,
+                "moving_part_name": edge.moving_node.part_name,
                 "moving_segment_id": edge.moving_segment_id,
-                "moving_segment_name": edge.moving_segment_id.replace("_", " "),
+                "moving_segment_name": edge.moving_segment_name,
                 "moving_vertex_count": int(edge.moving_vertex_ids.size),
-                "fixed_entity_name": edge.scene_element,
-                "fixed_part_name": edge.scene_element,
+                "fixed_entity_name": edge.fixed_node.entity_name,
+                "fixed_part_name": edge.fixed_node.part_name,
                 "fixed_point_count": int(edge.fixed_points.shape[0]),
                 "reduction": edge.reduction,
                 "nocontact_raw": float(nocontact_raw),
@@ -2392,11 +2493,27 @@ def compute_interaction_metrics(
 
 
 def resolve_optimization_stage_iters(args: argparse.Namespace) -> tuple[int, int]:
-    total_iters = args.adam_iters
-    rigid_iters = args.rigid_stage_iters
-    if not 0 <= rigid_iters < total_iters:
-        raise ValueError("Require 0 <= rigid_stage_iters < adam_iters.")
-    return rigid_iters, total_iters - rigid_iters
+    total_iters = int(args.adam_iters)
+    if total_iters <= 0:
+        raise RuntimeError("adam_iters must be > 0.")
+
+    if args.rigid_stage_iters is None:
+        if total_iters == 1:
+            rigid_iters = 0
+        else:
+            rigid_iters = int(round(total_iters * 0.4))
+            rigid_iters = min(max(rigid_iters, 1), total_iters - 1)
+    else:
+        rigid_iters = int(args.rigid_stage_iters)
+        if rigid_iters < 0:
+            raise RuntimeError("rigid_stage_iters must be >= 0.")
+        if total_iters > 1 and rigid_iters >= total_iters:
+            raise RuntimeError("rigid_stage_iters must be smaller than adam_iters.")
+        if total_iters == 1 and rigid_iters > 0:
+            raise RuntimeError("rigid_stage_iters must be 0 when adam_iters is 1.")
+
+    pose_iters = total_iters - rigid_iters
+    return rigid_iters, pose_iters
 
 
 def set_stage_trainable_params(
@@ -2415,7 +2532,7 @@ def optimize_track(
     smplx_layer: Any,
     faces_t: torch.Tensor,
     init_params_np: dict[str, np.ndarray],
-    interaction_edges: list[ContactConstraint],
+    interaction_edges: list[DynamicInteractionEdge],
     scene_collision_points: np.ndarray,
     scene_depth: np.ndarray | None,
     scene_depth_intrinsics: np.ndarray | None,
@@ -2428,21 +2545,13 @@ def optimize_track(
     rotation_world_to_camera: np.ndarray,
     translation_world_to_camera: np.ndarray,
 ) -> dict[str, Any]:
-    snapshot_active = args.debug and snapshot_every_iters > 0
-    scene_intersect_debug_active = args.debug
+    snapshot_active = int(snapshot_every_iters) > 0
+    scene_intersect_debug_active = bool(args.scene_intersect_debug)
     init_params_t = {
-        "transl": torch.from_numpy(init_params_np["transl"]).to(
-            device=device, dtype=torch.float32
-        ),
-        "global_orient": torch.from_numpy(init_params_np["global_orient"]).to(
-            device=device, dtype=torch.float32
-        ),
-        "body_pose": torch.from_numpy(init_params_np["body_pose"]).to(
-            device=device, dtype=torch.float32
-        ),
-        "betas": torch.from_numpy(init_params_np["betas"]).to(
-            device=device, dtype=torch.float32
-        ),
+        "transl": torch.from_numpy(init_params_np["transl"]).to(device=device, dtype=torch.float32),
+        "global_orient": torch.from_numpy(init_params_np["global_orient"]).to(device=device, dtype=torch.float32),
+        "body_pose": torch.from_numpy(init_params_np["body_pose"]).to(device=device, dtype=torch.float32),
+        "betas": torch.from_numpy(init_params_np["betas"]).to(device=device, dtype=torch.float32),
     }
     init_params_t["global_orient_matrix"] = axis_angle_to_matrix(
         init_params_t["global_orient"].view(1, 3)
@@ -2480,11 +2589,9 @@ def optimize_track(
             raise RuntimeError(
                 "human_scene_depth loss is enabled, but scene depth inputs are missing."
             )
-        scene_depth_t = (
-            torch.from_numpy(scene_depth.astype(np.float32))
-            .to(device)
-            .view(1, 1, scene_depth.shape[0], scene_depth.shape[1])
-        )
+        scene_depth_t = torch.from_numpy(
+            scene_depth.astype(np.float32)
+        ).to(device).view(1, 1, scene_depth.shape[0], scene_depth.shape[1])
         scene_depth_valid_t = (scene_depth_t > 1e-6).to(dtype=scene_depth_t.dtype)
         scene_depth_intrinsics_t = torch.from_numpy(
             scene_depth_intrinsics.astype(np.float32)
@@ -2536,7 +2643,7 @@ def optimize_track(
             weights = get_loss_weights(args, iter_idx - 1, int(args.adam_iters) - 1)
             if not optimize_body_pose:
                 weights = dict(weights)
-                weights["self_intersect"] = 1e-3
+                weights["self_intersect"] = 0.0
             optimizer.zero_grad(set_to_none=True)
             losses = compute_loss_dict(
                 params_module=params_module,
@@ -2616,17 +2723,15 @@ def optimize_track(
         )
         current = final_losses["current"]
         if scene_intersect_debug_active:
-            scene_intersect_debug_payloads["final"] = (
-                save_scene_intersect_debug_artifacts(
-                    debug_dir=scene_intersect_debug_dir,
-                    stage_name="final",
-                    current=current,
-                    smplx_layer=smplx_layer,
-                    scene_collision_points_t=scene_collision_points_t,
-                    clearance_margin_m=float(args.scene_intersect_margin_m),
-                    rotation_world_to_camera=rotation_world_to_camera,
-                    translation_world_to_camera=translation_world_to_camera,
-                )
+            scene_intersect_debug_payloads["final"] = save_scene_intersect_debug_artifacts(
+                debug_dir=scene_intersect_debug_dir,
+                stage_name="final",
+                current=current,
+                smplx_layer=smplx_layer,
+                scene_collision_points_t=scene_collision_points_t,
+                clearance_margin_m=float(args.scene_intersect_margin_m),
+                rotation_world_to_camera=rotation_world_to_camera,
+                translation_world_to_camera=translation_world_to_camera,
             )
     return {
         "iter_rows": iter_rows,
@@ -2636,11 +2741,7 @@ def optimize_track(
         "verts_camera": current["verts"].detach().cpu().numpy().astype(np.float32),
         "joints_camera": current["joints"].detach().cpu().numpy().astype(np.float32),
         "transl": current["transl"].detach().cpu().numpy().astype(np.float32),
-        "global_orient": current["global_orient"]
-        .detach()
-        .cpu()
-        .numpy()
-        .astype(np.float32),
+        "global_orient": current["global_orient"].detach().cpu().numpy().astype(np.float32),
         "body_pose": current["body_pose"].detach().cpu().numpy().astype(np.float32),
         "betas": current["betas"].detach().cpu().numpy().astype(np.float32),
         "scale": float(current["scale"].detach().cpu().item()),
@@ -2663,9 +2764,7 @@ def main() -> None:
     args = parse_args()
     defaults = build_default_paths(args.interaction_name, args.contact_mask_mode)
     generated_root = resolve_path(args.generated_root, defaults["generated_root"])
-    input_scene_json_path = resolve_path(
-        args.input_scene_json, defaults["input_scene_json"]
-    )
+    input_scene_json_path = resolve_path(args.input_scene_json, defaults["input_scene_json"])
     human_pose_root = resolve_path(args.human_pose_root, defaults["human_pose_root"])
     sig_json_path = resolve_path(args.sig_json, defaults["sig_json"])
     smpl_seg_json_path = resolve_path(args.smpl_seg_json, defaults["smpl_seg_json"])
@@ -2683,9 +2782,9 @@ def main() -> None:
     scene_root = ensure_dir(output_root / "scene")
     human_scene_depth_active = human_scene_depth_loss_enabled(args)
     scene_depth_dir = scene_root / "depth"
-    if human_scene_depth_active and args.debug:
+    if human_scene_depth_active:
         ensure_dir(scene_depth_dir)
-    debug_root = output_root / "debug"
+    debug_root = ensure_dir(output_root / "debug")
     summary_json_path = output_root / "alignment_summary.json"
     scannet_root = resolve_scannet_root(SCRIPT_DIR, args.scannet_root)
     device = parse_device(args.device)
@@ -2712,7 +2811,7 @@ def main() -> None:
             "Inpainted frame shape does not match ScanNet++ camera metadata: "
             f"image={first_frame_bgr.shape[1]}x{first_frame_bgr.shape[0]}, "
             f"metadata={width}x{height}. "
-            "Run 02_Generate_Human_Frame/01_generate_human_frame.py first."
+            "Run 02_Generate_Human_Frame/02_generate_human_frame.py first."
         )
     camera_ctx = build_identity_camera(
         intrinsics=intrinsics,
@@ -2759,7 +2858,11 @@ def main() -> None:
             scene_verts_camera_render,
             scene_faces_render,
             _,
-        ) = compact_mesh_with_vertex_ids(scene_verts_camera, scene_faces_in_view)
+        ) = compact_mesh_with_vertex_ids(
+            scene_verts_camera, scene_faces_in_view
+        )
+        if scene_faces_render.shape[0] == 0:
+            raise RuntimeError("No scene faces remained after view-frustum filtering.")
     contact_scene_faces_in_view = filter_faces_to_camera_view(
         verts_camera=scene_verts_camera,
         faces=scene_faces,
@@ -2777,6 +2880,10 @@ def main() -> None:
         scene_verts_camera,
         contact_scene_faces_in_view,
     )
+    if contact_scene_faces_render.shape[0] == 0:
+        raise RuntimeError(
+            "No scene faces remained after contact crop camera filtering."
+        )
 
     if human_scene_depth_active:
         scene_depth, _, _ = rasterize_depth_and_mask(
@@ -2785,11 +2892,8 @@ def main() -> None:
             camera_ctx=camera_ctx,
             device=device,
         )
-        if args.debug:
-            np.save(scene_depth_dir / "scene_depth.npy", scene_depth.astype(np.float32))
-            save_depth_visualization(
-                scene_depth_dir / "scene_depth_vis.png", scene_depth
-            )
+        np.save(scene_depth_dir / "scene_depth.npy", scene_depth.astype(np.float32))
+        save_depth_visualization(scene_depth_dir / "scene_depth_vis.png", scene_depth)
     else:
         scene_depth = None
 
@@ -2802,69 +2906,68 @@ def main() -> None:
     faces_np = np.asarray(smplx_layer.faces, dtype=np.int64)
     faces_t = torch.from_numpy(faces_np.astype(np.int64)).to(device)
 
-    print("\nProcessing human")
-    meshes_root = ensure_dir(output_root / "meshes")
-    overlay_dir = debug_root / "overlays"
-    plot_dir = debug_root / "plots"
-    snapshots_dir = debug_root / "snapshots"
-    scene_intersect_debug_dir = debug_root / "scene_intersect"
-    if args.debug:
-        for directory in (
-            overlay_dir,
-            plot_dir,
-            snapshots_dir,
-            scene_intersect_debug_dir,
-        ):
-            ensure_dir(directory)
+    human_summary: dict[str, Any] | None = None
 
-    init_params_torch = load_first_frame_smplx_params(
-        human_result_dir,
-        args.smpl_param_key,
-    )
-    with torch.no_grad():
-        init_out = smplx_layer(
-            transl=init_params_torch["transl"].view(1, 3).to(device),
-            global_orient=init_params_torch["global_orient"].view(1, 3).to(device),
-            body_pose=init_params_torch["body_pose"].view(1, -1).to(device),
-            betas=init_params_torch["betas"].view(1, -1).to(device),
-            return_full_pose=True,
-        )
-        init_verts_camera = (
-            init_out.vertices[0].detach().cpu().numpy().astype(np.float32)
-        )
+    for result_dir in [human_result_dir]:
+        print("\nProcessing human")
+        meshes_root = ensure_dir(output_root / "meshes")
+        debug_track_root = debug_root
+        overlay_dir = ensure_dir(debug_track_root / "overlays")
+        csv_dir = ensure_dir(debug_track_root / "csv")
+        plot_dir = ensure_dir(debug_track_root / "plots" / "iter")
+        params_dir = ensure_dir(debug_track_root / "params")
+        snapshots_dir = ensure_dir(debug_track_root / "snapshots")
+        scene_intersect_debug_dir = ensure_dir(debug_track_root / "scene_intersect")
 
-    scene_collision_points, scene_collision_sampling_stats = (
-        sample_scene_surface_points(
+        init_params_torch = load_first_frame_smplx_params(
+            result_dir,
+            args.smpl_param_key,
+        )
+        with torch.no_grad():
+            init_out = smplx_layer(
+                transl=init_params_torch["transl"].view(1, 3).to(device),
+                global_orient=init_params_torch["global_orient"].view(1, 3).to(device),
+                body_pose=init_params_torch["body_pose"].view(1, -1).to(device),
+                betas=init_params_torch["betas"].view(1, -1).to(device),
+                return_full_pose=True,
+            )
+            init_verts_camera = init_out.vertices[0].detach().cpu().numpy().astype(np.float32)
+
+        scene_collision_points, scene_collision_sampling_stats = (
+            sample_scene_surface_points(
+                scene_verts_camera=contact_scene_verts_camera,
+                scene_faces=contact_scene_faces_render,
+                num_samples=int(args.scene_intersect_surface_samples),
+                seed=int(args.seed) + 4242,
+            )
+        )
+        scene_collision_sampling_stats["source_camera"] = "contact"
+
+        interaction_edges = build_dynamic_interaction_edges(
+            sig_payload=sig_payload,
+            target_object_name=target_object_name,
+            segment_catalog=segment_catalog,
+            contact_masks_dir=contact_masks_dir,
             scene_verts_camera=contact_scene_verts_camera,
-            scene_faces=contact_scene_faces_render,
-            num_samples=int(args.scene_intersect_surface_samples),
-            seed=int(args.seed) + 4242,
+            scene_faces_compact=contact_scene_faces_render,
+            scene_vertex_source_ids=contact_scene_vertex_source_ids,
+            camera_ctx=contact_camera_ctx,
+            device=device,
+            surface_sample_seed=int(args.seed),
+            init_verts_camera=init_verts_camera,
+            contact_projection_depth_jump_m=float(
+                args.contact_projection_depth_jump_m
+            ),
+            contact_projection_nearby_depth_m=float(
+                args.contact_projection_nearby_depth_m
+            ),
+            contact_projection_min_component_pixels=int(
+                args.contact_projection_min_component_pixels
+            ),
+            contact_projection_max_component_gap_px=float(
+                args.contact_projection_max_component_gap_px
+            ),
         )
-    )
-    scene_collision_sampling_stats["source_camera"] = "contact"
-
-    interaction_edges = build_contact_constraints(
-        sig_payload=sig_payload,
-        target_object_name=target_object_name,
-        segment_catalog=segment_catalog,
-        contact_masks_dir=contact_masks_dir,
-        scene_verts_camera=contact_scene_verts_camera,
-        scene_faces_compact=contact_scene_faces_render,
-        scene_vertex_source_ids=contact_scene_vertex_source_ids,
-        camera_ctx=contact_camera_ctx,
-        device=device,
-        surface_sample_seed=int(args.seed),
-        init_verts_camera=init_verts_camera,
-        contact_projection_depth_jump_m=float(args.contact_projection_depth_jump_m),
-        contact_projection_nearby_depth_m=float(args.contact_projection_nearby_depth_m),
-        contact_projection_min_component_pixels=int(
-            args.contact_projection_min_component_pixels
-        ),
-        contact_projection_max_component_gap_px=float(
-            args.contact_projection_max_component_gap_px
-        ),
-    )
-    if args.debug:
         save_static_snapshot_references(
             snapshots_dir=snapshots_dir,
             interaction_edges=interaction_edges,
@@ -2874,89 +2977,76 @@ def main() -> None:
             rotation_world_to_camera=rotation_world_to_camera,
             translation_world_to_camera=translation_world_to_camera,
         )
-    init_params_np = {
-        key: value.detach().cpu().numpy().astype(np.float32)
-        for key, value in init_params_torch.items()
-    }
+        init_params_np = {
+            key: value.detach().cpu().numpy().astype(np.float32)
+            for key, value in init_params_torch.items()
+        }
 
-    if args.debug:
         init_depth, _init_mask_rendered, _ = rasterize_depth_and_mask(
             init_verts_camera,
             faces_np,
             camera_ctx=camera_ctx,
             device=device,
         )
-        save_depth_visualization(
-            overlay_dir / "frame_0000_init_depth_vis.png", init_depth
+        save_depth_visualization(overlay_dir / "frame_0000_init_depth_vis.png", init_depth)
+        init_interaction_metrics = compute_interaction_metrics(init_verts_camera, interaction_edges)
+
+        optimization = optimize_track(
+            smplx_layer=smplx_layer,
+            faces_t=faces_t,
+            init_params_np=init_params_np,
+            interaction_edges=interaction_edges,
+            scene_collision_points=scene_collision_points,
+            scene_depth=scene_depth,
+            scene_depth_intrinsics=intrinsics if human_scene_depth_active else None,
+            args=args,
+            device=device,
+            snapshots_dir=snapshots_dir,
+            scene_intersect_debug_dir=scene_intersect_debug_dir,
+            snapshot_every_iters=int(args.snapshot_every_iters),
+            faces_np=faces_np,
+            rotation_world_to_camera=rotation_world_to_camera,
+            translation_world_to_camera=translation_world_to_camera,
         )
-    init_interaction_metrics = compute_interaction_metrics(
-        init_verts_camera, interaction_edges
-    )
 
-    optimization = optimize_track(
-        smplx_layer=smplx_layer,
-        faces_t=faces_t,
-        init_params_np=init_params_np,
-        interaction_edges=interaction_edges,
-        scene_collision_points=scene_collision_points,
-        scene_depth=scene_depth,
-        scene_depth_intrinsics=intrinsics if human_scene_depth_active else None,
-        args=args,
-        device=device,
-        snapshots_dir=snapshots_dir,
-        scene_intersect_debug_dir=scene_intersect_debug_dir,
-        snapshot_every_iters=int(args.snapshot_every_iters),
-        faces_np=faces_np,
-        rotation_world_to_camera=rotation_world_to_camera,
-        translation_world_to_camera=translation_world_to_camera,
-    )
-
-    final_verts_camera = optimization["verts_camera"]
-    if args.debug:
+        final_verts_camera = optimization["verts_camera"]
         final_depth, _final_mask_rendered, _ = rasterize_depth_and_mask(
             final_verts_camera,
             faces_np,
             camera_ctx=camera_ctx,
             device=device,
         )
-        save_depth_visualization(
-            overlay_dir / "frame_0000_final_depth_vis.png", final_depth
+        save_depth_visualization(overlay_dir / "frame_0000_final_depth_vis.png", final_depth)
+
+        final_verts_world = transform_camera_to_world(
+            final_verts_camera,
+            rotation_world_to_camera=rotation_world_to_camera,
+            translation_world_to_camera=translation_world_to_camera,
         )
+        write_ascii_ply(meshes_root / "frame_0000_camera.ply", final_verts_camera, faces_np)
+        write_ascii_ply(meshes_root / "frame_0000_world.ply", final_verts_world, faces_np)
 
-    final_verts_world = transform_camera_to_world(
-        final_verts_camera,
-        rotation_world_to_camera=rotation_world_to_camera,
-        translation_world_to_camera=translation_world_to_camera,
-    )
-    write_ascii_ply(meshes_root / "frame_0000_camera.ply", final_verts_camera, faces_np)
-    write_ascii_ply(meshes_root / "frame_0000_world.ply", final_verts_world, faces_np)
+        optimized_params_payload = {
+            "transl": optimization["transl"].tolist(),
+            "global_orient": optimization["global_orient"].tolist(),
+            "body_pose": optimization["body_pose"].tolist(),
+            "betas": optimization["betas"].tolist(),
+            "scale": float(optimization["scale"]),
+            "log_scale": float(optimization["log_scale"]),
+            "height_m": float(optimization["height_m"]),
+            "canonical_height_unscaled_m": float(
+                optimization["canonical_height_unscaled_m"]
+            ),
+        }
+        torch.save(optimized_params_payload, params_dir / "optimized_frame_0000.pt")
 
-    optimized_params_payload = {
-        "transl": optimization["transl"].tolist(),
-        "global_orient": optimization["global_orient"].tolist(),
-        "body_pose": optimization["body_pose"].tolist(),
-        "betas": optimization["betas"].tolist(),
-        "scale": float(optimization["scale"]),
-        "log_scale": float(optimization["log_scale"]),
-        "height_m": float(optimization["height_m"]),
-        "canonical_height_unscaled_m": float(
-            optimization["canonical_height_unscaled_m"]
-        ),
-    }
-    torch.save(optimized_params_payload, output_root / "optimized_params.pt")
-
-    iter_metrics_csv = output_root / "loss_history.csv"
-    final_loss_summary_csv = output_root / "final_loss.csv"
-    save_csv_rows(iter_metrics_csv, optimization["iter_rows"])
-    save_csv_rows(
-        final_loss_summary_csv,
-        [
-            build_final_loss_summary_row(
-                optimization["final_iter"], optimization["final_losses"]
-            )
-        ],
-    )
-    if args.debug:
+        iter_metrics_csv = csv_dir / "iter_metrics.csv"
+        final_loss_summary_csv = csv_dir / "final_loss_summary.csv"
+        save_csv_rows(iter_metrics_csv, optimization["iter_rows"])
+        save_csv_rows(
+            final_loss_summary_csv,
+            [build_final_loss_summary_row(optimization["final_iter"], optimization["final_losses"])],
+        )
         save_loss_plot_tree(
             plot_dir,
             optimization["iter_rows"],
@@ -2967,50 +3057,41 @@ def main() -> None:
             title_prefix="Iter",
         )
 
-    final_interaction_metrics = compute_interaction_metrics(
-        final_verts_camera, interaction_edges
-    )
+        final_interaction_metrics = compute_interaction_metrics(final_verts_camera, interaction_edges)
 
-    human_summary = {
-        "optimization": {
-            "final_iter": int(optimization["final_iter"]),
-            "final_total_loss": float(optimization["final_total_loss"]),
-            "stage_iters": optimization["stage_iters"],
-            "scene_intersect_sampling": scene_collision_sampling_stats,
-            "scene_intersect_stats": optimization["scene_intersect_stats"],
-            "human_scene_depth_stats": optimization["human_scene_depth_stats"],
-            "scene_intersect_debug": optimization["scene_intersect_debug"],
-        },
-        "init_frame_0": {
-            "interaction_edges": init_interaction_metrics,
-        },
-        "final_frame_0": {
-            "interaction_edges": final_interaction_metrics,
-        },
-        "artifacts": {
-            "camera_mesh": str(meshes_root / "frame_0000_camera.ply"),
-            "world_mesh": str(meshes_root / "frame_0000_world.ply"),
-            "init_depth_vis": str(overlay_dir / "frame_0000_init_depth_vis.png")
-            if args.debug
-            else None,
-            "final_depth_vis": str(overlay_dir / "frame_0000_final_depth_vis.png")
-            if args.debug
-            else None,
-            "optimized_params": str(output_root / "optimized_params.pt"),
-            "scene_intersect_debug": str(scene_intersect_debug_dir)
-            if args.debug
-            else None,
-            "csv": {
-                "iter_metrics": str(iter_metrics_csv),
-                "final_loss_summary": str(final_loss_summary_csv),
+        human_summary = {
+            "optimization": {
+                "final_iter": int(optimization["final_iter"]),
+                "final_total_loss": float(optimization["final_total_loss"]),
+                "stage_iters": optimization["stage_iters"],
+                "scene_intersect_sampling": scene_collision_sampling_stats,
+                "scene_intersect_stats": optimization["scene_intersect_stats"],
+                "human_scene_depth_stats": optimization["human_scene_depth_stats"],
+                "scene_intersect_debug": optimization["scene_intersect_debug"],
             },
-        },
-    }
+            "init_frame_0": {
+                "interaction_edges": init_interaction_metrics,
+            },
+            "final_frame_0": {
+                "interaction_edges": final_interaction_metrics,
+            },
+            "artifacts": {
+                "camera_mesh": str(meshes_root / "frame_0000_camera.ply"),
+                "world_mesh": str(meshes_root / "frame_0000_world.ply"),
+                "init_depth_vis": str(overlay_dir / "frame_0000_init_depth_vis.png"),
+                "final_depth_vis": str(overlay_dir / "frame_0000_final_depth_vis.png"),
+                "optimized_params": str(params_dir / "optimized_frame_0000.pt"),
+                "scene_intersect_debug": str(scene_intersect_debug_dir),
+                "csv": {
+                    "iter_metrics": str(iter_metrics_csv),
+                    "final_loss_summary": str(final_loss_summary_csv),
+                },
+            },
+        }
 
     save_json(
         summary_json_path,
         {
-            "settings": vars(args),
             "interaction_name": args.interaction_name,
             "contact_mask_mode": args.contact_mask_mode,
             "scene_id": scene_context["scene_id"],
@@ -3047,7 +3128,7 @@ def main() -> None:
                         "end": float(args.scene_intersect_weight_end),
                         "clearance_margin_m": float(args.scene_intersect_margin_m),
                         "surface_samples": int(args.scene_intersect_surface_samples),
-                        "debug": args.debug,
+                        "debug": bool(args.scene_intersect_debug),
                     },
                     "human_scene_depth": {
                         "start": float(args.human_scene_depth_weight_start),

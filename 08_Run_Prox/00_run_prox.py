@@ -2275,7 +2275,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--interaction_name",
         "--interaction-name",
         dest="interaction_name",
-        default="interaction_01",
+        default="interaction_02",
     )
     selection.add_argument(
         "--all_interactions",

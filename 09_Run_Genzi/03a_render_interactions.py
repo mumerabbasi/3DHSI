@@ -33,7 +33,8 @@ def parse_args() -> argparse.Namespace:
             "changing only the human mesh."
         )
     )
-    parser.add_argument("--interaction_name", default="interaction_01")
+    parser.add_argument("--interaction_name", default="interaction_02")
+    parser.add_argument("--all_interactions", action="store_true")
     parser.add_argument("--output_mode", default=DEFAULT_OUTPUT_MODE)
     parser.add_argument("--output_root", type=Path, default=None)
     parser.add_argument(
@@ -125,7 +126,10 @@ import bpy
 
 def import_ply(path):
     before = set(bpy.context.scene.objects)
-    bpy.ops.wm.ply_import(filepath=str(path))
+    if hasattr(bpy.ops.wm, "ply_import"):
+        bpy.ops.wm.ply_import(filepath=str(path))
+    else:
+        bpy.ops.import_mesh.ply(filepath=str(path))
     imported = list(set(bpy.context.scene.objects) - before)
     if len(imported) != 1:
         raise RuntimeError(f"Expected one imported PLY object, got {len(imported)}")
@@ -195,7 +199,7 @@ def render_interaction(
     interaction_name: str, args: argparse.Namespace
 ) -> dict[str, Any]:
     output_root = ensure_dir(
-        args.output_root.resolve() / interaction_name / "semantics"
+        args.output_root.resolve()
         if args.output_root is not None
         else genzi_eval_root(args.output_mode) / interaction_name / "semantics"
     )
@@ -275,9 +279,11 @@ def main() -> None:
     args = parse_args()
     names = (
         discover_genzi_interactions(args.output_mode, args.selection_config)
-        if args.interaction_name == "all"
+        if args.all_interactions or args.interaction_name == "all"
         else [args.interaction_name]
     )
+    if len(names) > 1 and args.output_root is not None:
+        raise ValueError("--output_root can only be used with one interaction")
     write_selection_manifest(names, args.output_mode, args.selection_config)
     rows = [render_interaction(name, args) for name in names]
     if len(names) > 1:

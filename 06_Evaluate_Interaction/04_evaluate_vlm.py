@@ -4,6 +4,7 @@ import argparse
 import base64
 import csv
 import json
+import re
 import shutil
 import time
 import urllib.error
@@ -256,31 +257,18 @@ def ollama_chat(
     return content.strip()
 
 
-def request_gemini(
-    client: Any,
-    *,
-    model: str,
-    contents: list[Any],
-    config: Any,
-    retries: int,
-    retry_sleep_s: float,
-) -> Any:
-    from google.genai import errors
-    from httpx import TransportError
-
-    attempts = max(1, retries)
-    for attempt in range(attempts):
-        try:
-            return client.models.generate_content(
-                model=model, contents=contents, config=config
-            )
-        except (errors.APIError, TransportError) as exc:
-            if isinstance(exc, errors.APIError) and exc.code != 429 and exc.code < 500:
-                raise
-            if attempt + 1 == attempts:
-                raise
-            print(f"Gemini request failed ({attempt + 1}/{attempts}): {exc}")
-            time.sleep(max(0.0, retry_sleep_s))
+def response_chunk_text(chunk: Any) -> str:
+    text = getattr(chunk, "text", None)
+    if isinstance(text, str):
+        return text
+    parts = []
+    for candidate in getattr(chunk, "candidates", []) or []:
+        content = getattr(candidate, "content", None)
+        for part in getattr(content, "parts", []) or []:
+            part_text = getattr(part, "text", None)
+            if isinstance(part_text, str):
+                parts.append(part_text)
+    return "".join(parts)
 
 
 def gemini_generate_json(
@@ -292,31 +280,40 @@ def gemini_generate_json(
     temperature: float,
     seed: int,
     max_output_tokens: int,
-    retries: int,
-    retry_sleep_s: float,
 ) -> str:
-    from google import genai
-    from google.genai import types
+    try:
+        from google import genai
+        from google.genai import types
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "The Google GenAI Python package is not installed. Install it in "
+            "this environment, for example with: pip install google-genai"
+        ) from exc
 
+    client = genai.Client(api_key=api_key)
     config = types.GenerateContentConfig(
-        temperature=temperature,
-        seed=seed,
-        max_output_tokens=max_output_tokens,
-        response_mime_type="application/json",
+        temperature=float(temperature),
+        seed=int(seed),
+        maxOutputTokens=int(max_output_tokens),
+        responseMimeType="application/json",
     )
-    with genai.Client(api_key=api_key) as client:
-        response = request_gemini(
-            client,
-            model=model,
-            contents=[prompt]
-            + [open_rgb_image(path, max_image_side) for path in image_paths],
-            config=config,
-            retries=retries,
-            retry_sleep_s=retry_sleep_s,
-        )
-    if not response.text:
+    contents = [prompt] + [
+        open_rgb_image(path, max_image_side=max_image_side) for path in image_paths
+    ]
+    content_chunks: list[str] = []
+    for chunk in client.models.generate_content_stream(
+        model=model,
+        contents=contents,
+        config=config,
+    ):
+        text = response_chunk_text(chunk)
+        if text:
+            content_chunks.append(text)
+
+    content = "".join(content_chunks)
+    if not content.strip():
         raise RuntimeError("Gemini response did not contain text content.")
-    return response.text.strip()
+    return content.strip()
 
 
 def effective_vlm_model(args: argparse.Namespace) -> str:
@@ -349,23 +346,43 @@ def vlm_generate_json(
         Path(args.gemini_api_key_file).resolve(),
         "Gemini",
     )
-    return gemini_generate_json(
-        api_key=gemini_api_key,
-        model=args.gemini_model,
-        prompt=prompt,
-        image_paths=render_paths,
-        max_image_side=args.max_image_side,
-        temperature=args.temperature,
-        seed=args.seed,
-        max_output_tokens=args.gemini_max_output_tokens,
-        retries=args.gemini_retries,
-        retry_sleep_s=args.gemini_retry_sleep_s,
-    )
-
+    max_attempts = max(1, int(args.gemini_retries))
+    retry_sleep_s = max(0.0, float(args.gemini_retry_sleep_s))
+    last_error: Exception | None = None
+    for attempt_index in range(1, max_attempts + 1):
+        try:
+            return gemini_generate_json(
+                api_key=gemini_api_key,
+                model=str(args.gemini_model),
+                prompt=prompt,
+                image_paths=render_paths,
+                max_image_side=int(args.max_image_side),
+                temperature=float(args.temperature),
+                seed=int(args.seed),
+                max_output_tokens=int(args.gemini_max_output_tokens),
+            )
+        except Exception as exc:
+            last_error = exc
+            if attempt_index >= max_attempts:
+                break
+            print(
+                "Gemini VLM attempt failed: "
+                f"{exc}. Retrying in {retry_sleep_s:.1f}s..."
+            )
+            time.sleep(retry_sleep_s)
+    if last_error is None:
+        raise RuntimeError("Gemini VLM evaluation did not run.")
+    raise RuntimeError("Gemini VLM evaluation failed.") from last_error
 
 
 def parse_json_response(raw_response: str) -> dict[str, Any]:
-    parsed = json.loads(raw_response)
+    try:
+        parsed = json.loads(raw_response)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", raw_response, flags=re.DOTALL)
+        if match is None:
+            raise
+        parsed = json.loads(match.group(0))
     if not isinstance(parsed, dict):
         raise ValueError("VLM response JSON must be an object.")
     return parsed
@@ -425,10 +442,15 @@ def evaluate_interaction_vlm(
     interaction_name: str,
     args: argparse.Namespace,
     prompt_template: str,
-    input_scene_json_path: Path,
-    render_root: Path,
-    output_root: Path,
+    prompt_template_path: Path,
 ) -> dict[str, Any]:
+    defaults = build_default_paths(interaction_name, args.output_mode)
+    input_scene_json_path = resolve_path(
+        args.input_scene_json,
+        defaults["input_scene_json"],
+    )
+    render_root = resolve_path(args.render_root, defaults["render_root"])
+    output_root = resolve_path(args.output_root, defaults["output_root"])
     output_root.mkdir(parents=True, exist_ok=True)
 
     interaction_prompt = resolve_interaction_prompt(input_scene_json_path)
@@ -481,7 +503,21 @@ def load_vlm_metrics_row(metrics_csv_path: Path) -> dict[str, float | None]:
     }
 
 
-def aggregate_vlm_evals(output_root: Path) -> list[dict[str, Any]]:
+def aggregate_vlm_evals(args: argparse.Namespace) -> list[dict[str, Any]]:
+    if any(
+        value is not None
+        for value in (
+            args.input_scene_json,
+            args.render_root,
+            args.output_root,
+        )
+    ):
+        raise ValueError(
+            "--aggregate_evals cannot be combined with per-interaction "
+            "input/render/output overrides."
+        )
+
+    output_root = SCRIPT_DIR / args.output_mode
     metrics_csv_paths = sorted(output_root.glob("interaction_*/vlm/metrics.csv"))
     if not metrics_csv_paths:
         raise FileNotFoundError(
@@ -503,7 +539,11 @@ def aggregate_vlm_evals(output_root: Path) -> list[dict[str, Any]]:
             for row in rows
             if isinstance(row.get(fieldname), int | float)
         ]
-        mean_row[fieldname] = float(sum(values) / len(values)) if values else None
+        mean_row[fieldname] = (
+            float(sum(values) / len(values))
+            if values
+            else None
+        )
 
     output_rows = rows + [mean_row]
     output_path = output_root / "vlm.csv"
@@ -519,9 +559,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Evaluate rendered interactions with a Qwen or Gemini VLM verifier."
     )
-    parser.add_argument(
-        "--interaction_name", default="interaction_01", help="Interaction ID, or all."
-    )
+    parser.add_argument("--interaction_name", type=str, default="interaction_01")
     parser.add_argument(
         "--output_mode",
         choices=OUTPUT_MODES,
@@ -533,6 +571,11 @@ def parse_args() -> argparse.Namespace:
             "uses/reads/writes the output_round1 ablation folders; 'output_init' "
             "reads/writes the module-04 first-frame evaluation folder."
         ),
+    )
+    parser.add_argument(
+        "--all_interactions",
+        action=argparse.BooleanOptionalAction,
+        default=False,
     )
     parser.add_argument(
         "--aggregate_evals",
@@ -561,6 +604,12 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_GEMINI_MODEL,
         help="Gemini model used when --vlm_provider=gemini.",
     )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Legacy alias for --qwen_model.",
+    )
     parser.add_argument("--ollama_host", type=str, default="http://localhost:11434")
     parser.add_argument(
         "--gemini_api_key_file",
@@ -568,6 +617,12 @@ def parse_args() -> argparse.Namespace:
         default=str(PROJECT_DIR / ".secrets" / "gemini_api_key"),
     )
     parser.add_argument("--prompt_template", type=str, default=None)
+    parser.add_argument(
+        "--system_prompt",
+        type=str,
+        default=None,
+        help="Legacy alias for --prompt_template.",
+    )
     parser.add_argument("--input_scene_json", type=str, default=None)
     parser.add_argument("--render_root", type=str, default=None)
     parser.add_argument("--output_root", type=str, default=None)
@@ -579,34 +634,40 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gemini_retries", type=int, default=3)
     parser.add_argument("--gemini_retry_sleep_s", type=float, default=10.0)
     args = parser.parse_args()
+    if args.model is not None:
+        args.qwen_model = args.model
     return args
 
 
 def main() -> None:
     args = parse_args()
-    output_base = resolve_path(args.output_root, SCRIPT_DIR / args.output_mode)
     if args.aggregate_evals:
-        aggregate_vlm_evals(output_base)
+        aggregate_vlm_evals(args)
         return
 
-    prompt_template_override = args.prompt_template
+    prompt_template_override = (
+        args.prompt_template
+        if args.prompt_template is not None
+        else args.system_prompt
+    )
     prompt_template_path = resolve_path(
         prompt_template_override,
         DEFAULT_PROMPT_TEMPLATE_PATH,
     )
     prompt_template = load_text(prompt_template_path)
-    all_mode = args.interaction_name == "all"
+    all_mode = bool(args.all_interactions) or args.interaction_name == "all"
     if all_mode:
         if any(
             value is not None
             for value in (
                 args.input_scene_json,
                 args.render_root,
+                args.output_root,
             )
         ):
             raise ValueError(
-                "--interaction_name all cannot be combined with per-interaction "
-                "input/render overrides."
+                "--all_interactions cannot be combined with per-interaction "
+                "input/render/output overrides."
             )
         interaction_names = discover_interactions(args.output_mode)
     else:
@@ -617,21 +678,11 @@ def main() -> None:
             interaction_name=interaction_name,
             args=args,
             prompt_template=prompt_template,
-            input_scene_json_path=resolve_path(
-                args.input_scene_json,
-                build_default_paths(interaction_name, args.output_mode)[
-                    "input_scene_json"
-                ],
-            ),
-            render_root=resolve_path(
-                args.render_root,
-                build_default_paths(interaction_name, args.output_mode)["render_root"],
-            ),
-            output_root=output_base / interaction_name / "vlm",
+            prompt_template_path=prompt_template_path,
         )
 
     if all_mode:
-        aggregate_vlm_evals(output_base)
+        aggregate_vlm_evals(args)
 
 
 if __name__ == "__main__":

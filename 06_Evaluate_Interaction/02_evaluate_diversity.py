@@ -46,9 +46,7 @@ def resolve_path(raw_path: str | None, default_path: Path) -> Path:
     return default_path.resolve() if raw_path is None else Path(raw_path).resolve()
 
 
-def discover_optimized_param_paths(
-    optimization_output_root: Path,
-) -> list[tuple[str, Path]]:
+def discover_optimized_param_paths(optimization_output_root: Path) -> list[tuple[str, Path]]:
     if not optimization_output_root.is_dir():
         raise FileNotFoundError(
             f"Optimization output directory not found: {optimization_output_root}"
@@ -58,12 +56,12 @@ def discover_optimized_param_paths(
     for interaction_dir in sorted(optimization_output_root.iterdir()):
         if not interaction_dir.is_dir():
             continue
-        params_path = interaction_dir / "optimized_params.pt"
+        params_path = interaction_dir / "debug" / "params" / "optimized_frame_0000.pt"
         if params_path.exists():
             items.append((interaction_dir.name, params_path))
     if not items:
         raise RuntimeError(
-            f"No optimized_params.pt files found under {optimization_output_root}."
+            f"No optimized_frame_0000.pt files found under {optimization_output_root}."
         )
     return items
 

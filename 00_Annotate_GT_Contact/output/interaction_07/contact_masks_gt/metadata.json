@@ -1,0 +1,42 @@
+{
+  "palette": [
+    {
+      "part": "right hand",
+      "label": "Right Hand",
+      "hex": "#00FFFF",
+      "rgb": [
+        0,
+        255,
+        255
+      ],
+      "color_name": "pure cyan"
+    }
+  ],
+  "color_max_distance": 90.0,
+  "min_component_area": 0,
+  "keep_components": 1,
+  "source": "gt_contact_overlay",
+  "source_overlay_path": "/my_workspace/4DHHOI/4DHSI/00_Annotate_GT_Contact/output/interaction_07/contact_overlay_gt.png",
+  "source_canvas_path": "/my_workspace/4DHHOI/4DHSI/00_Annotate_GT_Contact/output/interaction_07/assets/target_scene_crop.png",
+  "source_contact_spec_path": "/my_workspace/4DHHOI/4DHSI/00_Annotate_GT_Contact/output/interaction_07/contact_spec.json",
+  "human_parts": [
+    "right hand"
+  ],
+  "source_sig_path": "/my_workspace/4DHHOI/4DHSI/01_Generate_SIG/output/interaction_07/sig.json",
+  "floor_parts": [
+    "left foot",
+    "right foot"
+  ],
+  "floor_mask_path": "/my_workspace/4DHHOI/4DHSI/00_Annotate_GT_Contact/output/interaction_07/floor_mask_crop.png",
+  "floor_sam3_prompt": "floor",
+  "floor_sam3_score": 0.963003933429718,
+  "floor_crop_xyxy": [
+    880,
+    298,
+    1636,
+    802
+  ],
+  "floor_source_scene_image_path": "/my_workspace/4DHHOI/4DHSI/01_Generate_SIG/output/interaction_07/scene_image.png",
+  "floor_source_input_scene_json_path": "/my_workspace/4DHHOI/4DHSI/01_Generate_SIG/input_prompts/interaction_07/input_scene.json",
+  "floor_source_transforms_path": "/my_workspace/4DHHOI/Scannet++/data/c085ff3df4/dslr/nerfstudio/transforms_undistorted.json"
+}

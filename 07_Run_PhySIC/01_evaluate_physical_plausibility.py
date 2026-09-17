@@ -27,6 +27,7 @@ def parse_args() -> argparse.Namespace:
         description="Evaluate PhySIC by swapping its optimized human into Module 06."
     )
     parser.add_argument("--interaction_name", default="interaction_01")
+    parser.add_argument("--all_interactions", action="store_true")
     parser.add_argument("--output_mode", default=DEFAULT_OUTPUT_MODE)
     parser.add_argument("--output_root", type=Path, default=None)
     parser.add_argument("--device", default="cuda:0")
@@ -37,7 +38,7 @@ def main() -> None:
     args = parse_args()
     names = (
         discover_physic_interactions(args.output_mode)
-        if args.interaction_name == "all"
+        if args.all_interactions or args.interaction_name == "all"
         else [args.interaction_name]
     )
     source_root = physic_output_root(args.output_mode)
@@ -53,7 +54,11 @@ def main() -> None:
             interaction_name=name,
             human_mesh_world=source_root / name / "meshes" / "human_world.ply",
             optimized_params_camera=(
-                source_root / name / "debug" / "params" / "optimized_frame_0000.pt"
+                source_root
+                / name
+                / "debug"
+                / "params"
+                / "optimized_frame_0000.pt"
             ),
             smplx_model=model_spec,
         )
