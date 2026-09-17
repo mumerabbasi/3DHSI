@@ -1,4 +1,4 @@
-# 4DHSI
+# 3DHSI
 
 **Foundation-Model-Guided Zero-Shot Synthesis of Human–Scene Interaction**
 Muhammad Umer Abbasi · Technical University of Munich · 2026
