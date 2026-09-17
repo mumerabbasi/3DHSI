@@ -183,7 +183,7 @@ The repository includes prompts, intermediate representations, masks, optimized 
 
 ## Running the method
 
-This branch is a research snapshot rather than a packaged library. It does not currently include a locked environment, container, test suite, or one-command end-to-end runner. Execution assumes a prepared Linux/CUDA research workspace.
+This repository is a research snapshot rather than a packaged library. It does not include a locked environment, container, or unit-test suite. The single-interaction runner below assumes a prepared Linux/CUDA research workspace.
 
 ### Prerequisites
 
