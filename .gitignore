@@ -18,6 +18,7 @@ __pycache__/
 
 # Generated results and research notes
 *output*/
+/01_Generate_SIG/input_prompts/
 /00_Notes/
 /00_Visualizations_Thesis/
 first_frames/
