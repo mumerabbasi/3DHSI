@@ -8,7 +8,7 @@ Given a natural-language instruction, one calibrated RGB view, and a reconstruct
 
 **Muhammad Umer Abbasi · Technical University of Munich · 2026**
 
-![Branch](https://img.shields.io/badge/branch-dev-2563EB)
+![Branch](https://img.shields.io/badge/branch-main-2563EB)
 ![Status](https://img.shields.io/badge/status-research_prototype-F59E0B)
 ![Thesis](https://img.shields.io/badge/Masters_Thesis-TUM-3070B3)
 ![Python](https://img.shields.io/badge/Python-PyTorch-3776AB?logo=python&logoColor=white)
@@ -18,7 +18,7 @@ Given a natural-language instruction, one calibrated RGB view, and a reconstruct
 </div>
 
 > [!IMPORTANT]
-> This `dev` branch contains the **static 3D human–scene interaction thesis system**. It produces one scene-grounded interaction state, not a temporal 4D sequence. This is distinct from the dynamic human–object pipeline on `main`.
+> This repository contains the **static 3D human–scene interaction thesis system**. It produces one scene-grounded interaction state, not a temporal 4D sequence. The dynamic human–object pipeline is a separate project.
 
 The central idea is to treat **scene-side contact** as the bridge between foundation-model knowledge and metric 3D geometry. Instead of trusting a generated interaction image as the final answer, the system asks an image model to mark the precise object-surface region for each required body-part contact. A vision-language model verifies those regions and requests corrections before they are projected onto the scene mesh and used to optimize the body. Floor-support contacts follow a separate SAM 3 segmentation branch.
 
@@ -181,7 +181,7 @@ The repository includes prompts, intermediate representations, masks, optimized 
 - [final geometric metrics](06_Evaluate_Interaction/output/interaction_22/physical_plausibility/metrics.json)
 - [ten final rendered views](06_Evaluate_Interaction/output/interaction_22/semantics/renders/)
 
-## Running the development branch
+## Running the method
 
 This branch is a research snapshot rather than a packaged library. It does not currently include a locked environment, container, test suite, or one-command end-to-end runner. Execution assumes a prepared Linux/CUDA research workspace.
 
@@ -282,4 +282,4 @@ This research builds on ScanNet++, SMPL-X, GVHMR, SAM 3, PyTorch3D, VolumetricSM
 
 ## License
 
-No project-level license has been assigned to this development branch. Repository access therefore does not by itself grant permission to reuse the code, data, or generated assets. Third-party components and datasets remain subject to their own terms.
+No project-level license has been assigned to this repository. Repository access therefore does not by itself grant permission to reuse the code, data, or generated assets. Third-party components and datasets remain subject to their own terms.
