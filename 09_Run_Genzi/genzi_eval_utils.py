@@ -94,6 +94,48 @@ def genzi_eval_root(output_mode: str = DEFAULT_OUTPUT_MODE) -> Path:
     return SCRIPT_DIR / "evaluation" / output_mode
 
 
+def relocate_genzi_output_path(
+    stored_path: str | Path,
+    output_mode: str = DEFAULT_OUTPUT_MODE,
+) -> Path:
+    """Relocate an existing GenZI path after the project directory moves."""
+    path = Path(stored_path).expanduser()
+    if path.exists():
+        return path.resolve()
+
+    try:
+        marker_index = len(path.parts) - 1 - path.parts[::-1].index("genzi_runs")
+    except ValueError:
+        return path.resolve()
+
+    relocated = (genzi_output_root(output_mode) / "genzi_runs").joinpath(
+        *path.parts[marker_index + 1 :]
+    )
+    return relocated.resolve() if relocated.exists() else path.resolve()
+
+
+def resolve_genzi_run_dir(
+    stored_path: str | Path,
+    output_mode: str = DEFAULT_OUTPUT_MODE,
+) -> Path:
+    """Resolve a run directory, including summaries moved with the project."""
+    run_dir = relocate_genzi_output_path(stored_path, output_mode)
+    if run_dir.is_dir():
+        return run_dir
+
+    # Run summaries contain the absolute log directory used when GenZI ran.
+    # If the project was renamed or moved, preserve the run directory name and
+    # relocate it beneath the current output root.
+    relocated = genzi_output_root(output_mode) / "genzi_runs" / run_dir.name
+    if relocated.is_dir():
+        return relocated.resolve()
+
+    raise FileNotFoundError(
+        "Missing GenZI run directory. "
+        f"Summary path: {run_dir.resolve()}; relocated path: {relocated.resolve()}"
+    )
+
+
 def interaction_sort_key(name: str) -> tuple[int, str]:
     try:
         return int(name.rsplit("_", 1)[1]), name
@@ -129,7 +171,7 @@ def list_final_candidates(
     interaction_root = genzi_interaction_root(interaction_name, output_mode)
     summary_path = interaction_root / "genzi_run_summary.json"
     summary = load_json(summary_path)
-    run_dir = Path(str(summary["genzi_log_dir"])).resolve()
+    run_dir = resolve_genzi_run_dir(summary["genzi_log_dir"], output_mode)
     scene_output_root = run_dir / interaction_name / interaction_name
     if not scene_output_root.is_dir():
         raise FileNotFoundError(
@@ -202,7 +244,7 @@ def write_selection_manifest(
     if unknown:
         raise KeyError(f"Selections are missing for: {', '.join(unknown)}")
     entries = []
-    for name in sorted(selections, key=interaction_sort_key):
+    for name in sorted(requested_names, key=interaction_sort_key):
         candidates = list_final_candidates(name, output_mode)
         selected_index = selections[name]
         entries.append(
@@ -249,7 +291,9 @@ def validate_render_selection(
     )
     render_config = load_json(render_config_path)
     rendered_index = render_config.get("selected_candidate_index")
-    rendered_dir = Path(str(render_config.get("selected_candidate_dir", ""))).resolve()
+    rendered_dir = relocate_genzi_output_path(
+        str(render_config.get("selected_candidate_dir", "")), output_mode
+    )
     if (
         rendered_index != candidate.index
         or rendered_dir != candidate.candidate_dir.resolve()
