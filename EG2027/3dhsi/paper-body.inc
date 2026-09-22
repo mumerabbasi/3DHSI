@@ -11,8 +11,8 @@
   \includegraphics[width=0.9\linewidth]{figures/teaser.jpg}
   \caption{Overview and representative results. Given an interaction
     instruction, a calibrated scene view, and reconstructed scene geometry,
-    our method generates a human reference, verifies body-part-specific
-    scene-side contact regions, and fits a scene-aligned 3D human. The bottom
+    our method generates a human interaction image, checks and refines
+    body-part-specific scene contact regions, and fits a scene-aligned 3D human. The bottom
     row shows synthesized interactions across different scenes.}
   \label{fig:teaser}
 }
@@ -20,27 +20,33 @@
 \maketitle
 %-------------------------------------------------------------------------
 \begin{abstract}
-Synthesizing humans in reconstructed 3D scenes requires accurate contact between each body part and the surface it should touch. Foundation models can generate plausible images of an interaction, but recovering these correspondences in metric 3D remains difficult. We present Agentic Contact, a zero-shot method that synthesizes a static SMPL-X body in accurate contact with the scene from a language instruction, a calibrated RGB view, and a reconstructed scene mesh, without training on paired 3D human-scene interactions. Our method explicitly represents contact as body-part-specific regions on the scene. An image model proposes these regions using a generated human image as reference, and a vision-language model checks their placement and requests targeted corrections. The resulting regions are projected onto the mesh as 3D contact targets. A scene-aware optimization refines a monocular body estimate to satisfy these targets while penalizing penetration. Across 23 interactions in 15 ScanNet++ scenes, verification improves contact accuracy compared with single-shot contact estimation. The full method achieves better contact accuracy and higher overall scores in a vision-language evaluation of rendered interactions than PhySIC, PROX, and GenZI.
+Generated images of people interacting with reconstructed scenes can look plausible while leaving the body out of contact with the intended 3D surfaces. We present Agentic Contact, a zero-shot method for synthesizing a static SMPL-X body from a language instruction, a calibrated RGB view, and a scene mesh, without training on paired 3D interactions. A generated interaction image guides body initialization and the proposal of body-part-specific object-contact masks on the original scene view. A vision-language model assesses the masks and requests targeted corrections. Calibrated projection converts the selected masks into scene-surface targets, and scene-aware optimization fits the body while penalizing penetration. Across 23 interactions in 15 ScanNet++ scenes, refinement raises 2D mask containment from 0.60 to 0.74 and lowers final contact distance from 6.98 to 3.87~cm relative to single-shot contacts. Against PROX and PhySIC fitted to the same generated human image, the full method attains lower contact distance. We separately compare rendered interaction quality with GenZI, which may generate a different valid realization of the instruction.
 
 %-------------------------------------------------------------------------
 \begin{CCSXML}
 <ccs2012>
 <concept>
-<concept_id>10010147.10010371.10010352</concept_id>
-<concept_desc>Computing methodologies~Animation</concept_desc>
+<concept_id>10010147.10010371.10010396</concept_id>
+<concept_desc>Computing methodologies~Shape modeling</concept_desc>
 <concept_significance>500</concept_significance>
+</concept>
+<concept>
+<concept_id>10010147.10010178.10010224.10010225.10010227</concept_id>
+<concept_desc>Computing methodologies~Scene understanding</concept_desc>
+<concept_significance>300</concept_significance>
 </concept>
 </ccs2012>
 \end{CCSXML}
 
-\ccsdesc[500]{Computing methodologies~Animation}
+\ccsdesc[500]{Computing methodologies~Shape modeling}
+\ccsdesc[300]{Computing methodologies~Scene understanding}
 
 \printccsdesc   
 \end{abstract}  
 %-------------------------------------------------------------------------
 \section{Introduction}
 
-Reconstructed 3D scenes provide detailed models of real environments, but populating them with humans requires understanding how the body interacts with the surrounding geometry. A person sitting on a table must be supported by its surface; a person using a treadmill must place the supporting foot on the belt and the hands on the appropriate rails. Such relationships determine whether a synthesized interaction is convincing beyond a single viewpoint. Producing these configurations from language instructions would simplify character placement in games, virtual environments, and digital content creation. The challenge is to translate the requested action into a plausible body pose with accurate contact on the scene.
+Populating reconstructed 3D scenes with virtual people supports character staging in games and immersive environments, while scene-aligned interaction poses can serve as keyframes for longer animations~\cite{li2024genzi,li2026genhsi}. In these applications, a plausible body must be grounded in the scene geometry: a seated person needs support from the furniture beneath them, and someone using a treadmill must place the feet on the belt and the hands on the appropriate rails. These contacts must remain plausible from different viewpoints. Generating such configurations from a language instruction could reduce manual character placement, but requires inferring both the body pose and the specific scene surfaces it should touch.
 
 Learning-based methods have made substantial progress in human-scene interaction synthesis. PLACE~\cite{zhang2020place} learns body-scene proximity, while POSA~\cite{hassan2021posa} models contact probabilities and scene semantics on the human body. COINS~\cite{zhao2022coins} introduces compositional control through action-object specifications. In the dynamic setting, HUMANISE~\cite{wang2022humanise} and TeSMo~\cite{yi2024tesmo} generate scene-aware human motion conditioned on language. These methods learn useful relationships between human configurations, scene geometry, and interaction intent. Their learned priors, however, reflect the coverage of their training data, making transfer to unfamiliar objects, environments, and actions a continuing challenge.
 
@@ -52,7 +58,7 @@ We focus on explicitly recovering these scene-side correspondences. Given an int
 
 We present \textbf{Agentic Contact}, a zero-shot method that synthesizes a static SMPL-X~\cite{pavlakos2019smplx} body from a language instruction, a calibrated RGB view, and a reconstructed scene mesh. A coarse interaction graph specifies the participating body parts and scene objects, and a generated human image provides a visual hypothesis of the action. An image model then proposes body-part-specific scene contact regions. A vision-language model checks their placement against the reference interaction and the original scene, providing targeted feedback for refinement. The resulting regions are projected onto the reconstructed mesh as 3D targets. A scene-aware optimization adjusts a monocular body estimate to satisfy these targets while penalizing penetration and retaining a plausible pose. The method uses pretrained models without task-specific training or fine-tuning on paired 3D human-scene interactions.
 
-We evaluate the method on 23 interactions in 15 ScanNet++~\cite{yeshwanth2023scannetpp} scenes. Ablations show that verifying and correcting contact regions improves localization and final 3D contact accuracy compared with single-shot estimation. The full method achieves better contact accuracy and higher overall scores in a vision-language evaluation of rendered interactions than PROX, PhySIC, and GenZI. The PhySIC comparison includes reference scene geometry to reduce differences arising from scene reconstruction.
+We evaluate the method on 23 interactions in 15 ScanNet++~\cite{yeshwanth2023scannetpp} scenes. Ablations show that verifying and correcting contact regions improves localization and final 3D contact accuracy compared with single-shot estimation. Against PROX and PhySIC fitted to the same generated image, our method achieves lower contact distance; its rendered interactions also receive higher overall vision-language scores than those of PROX, PhySIC, and GenZI.
 
 Our contributions are:
 \begin{itemize}
@@ -108,13 +114,9 @@ We represent the human using SMPL-X~\cite{pavlakos2019smplx}, with parameters
 \end{equation}
 where $\mathbf{t}$ and $R$ specify global translation and orientation, $\mathbf{p}$ is the articulated body pose, $\boldsymbol{\beta}$ describes body shape, and $s$ is an isotropic scale. The resulting body vertices are denoted by $V(\theta)$.
 
-Figure~\ref{fig:method-overview} illustrates the method. We first derive a coarse interaction specification and generate an image of a human performing the instruction. This reference image supplies evidence for both body initialization and scene contact localization. An image model proposes body-part-specific contact regions, which a vision-language model evaluates and refines through targeted feedback. The resulting regions are grounded on the reconstructed mesh and used to constrain body optimization.
+Figure~\ref{fig:method-overview} illustrates the method. We first derive a coarse interaction specification and generate an image of a human performing the instruction. This generated image supplies evidence for both body initialization and scene contact localization. An image model proposes body-part-specific contact regions, which a vision-language model evaluates and refines through targeted feedback. The resulting regions are grounded on the reconstructed mesh and used to constrain body optimization.
 
-We perform geometric processing in the calibrated camera frame. Scene points are transformed as
-\begin{equation}
-\mathbf{x}_c=R_{cw}\mathbf{x}_w+\mathbf{t}_{cw},
-\end{equation}
-placing the scene and the camera-relative human estimate in a common metric coordinate system. After optimization, the body is transformed back into scene coordinates.
+We express both the reconstructed scene and the monocular body estimate in the calibrated camera frame during optimization, then transform the fitted body back to scene coordinates.
 
 \subsection{Interaction specification and human initialization}
 \label{sec:method-initialization}
@@ -129,54 +131,69 @@ The graph specifies which body parts participate in the interaction while leavin
 
 Alongside the graph, the vision-language model produces a detailed enhanced prompt describing the intended pose and body-part contact relationships. Conditioned on this prompt and the original scene view, an image model generates five candidate human frames. A vision-language model compares the candidates against the enhanced prompt and the original view, selecting the frame that best satisfies the requested interaction and contact relationships while preserving the scene and maintaining a plausible human configuration. The selected frame, denoted by $\hat I$, guides both body initialization and scene contact localization.
 
-We recover an initial body from $\hat I$ using GVHMR~\cite{shen2024gvhmr}, supplying the calibrated focal length and retaining its camera-relative estimate. For the static input, we repeat the reference image to form a short constant sequence and take the first recovered body. This yields initial parameters $\theta_0$, with $s_0=1$. The same reference image guides contact localization, so the initial pose and scene targets are inferred from a shared visual hypothesis.
+We recover an initial body from $\hat I$ using GVHMR~\cite{shen2024gvhmr}, supplying the calibrated focal length and retaining its camera-relative estimate. For the static input, we repeat the generated image to form a short constant sequence and take the first recovered body. This yields initial parameters $\theta_0$, with $s_0=1$. The same generated image guides contact localization, so the initial pose and scene targets come from a shared visual hypothesis.
 
 \subsection{Agentic scene contact localization}
 \label{sec:method-contact}
 
-Figure~\ref{fig:agentic-contact} illustrates the contact proposal, verification, and correction process.
+Figure~\ref{fig:agentic-contact} illustrates one proposal-and-correction sequence.
 
 \begin{figure*}[t]
   \centering
   \includegraphics[width=\textwidth]{figures/agentic_contact.jpg}
-  \caption{Agentic contact estimation. Given the generated human reference, the original scene view, and the Scene Interaction Graph, an image model proposes body-part-specific contact regions. A vision-language model checks the proposed masks against the reference interaction and the original scene. In this example, it requests the missing left-hand contact while retaining the existing regions. The revised proposal is evaluated again and accepted. The refinement rounds are shown from left to right.}
+  \caption{Agentic contact estimation. The generated human image guides object-contact proposals on the original scene view. The evaluator detects a missing left-hand contact, requests its addition, and checks the revised masks. Acceptance means the visual check passed; it does not certify geometric correctness.}
   \label{fig:agentic-contact}
 \end{figure*}
 
-For each object-contact edge, we estimate a mask identifying the scene surface that the corresponding body part should touch. The generated reference $\hat I$ provides evidence about the intended contact, while the original view $I$ defines the image coordinates in which the region must be localized. A mask represents the contact footprint on the object surface, rather than the visible silhouette of the body part or the full extent of the object.
+For each object-contact edge, we assign a distinct color to the participating body part. The generated interaction image $\hat I$ suggests where that part touches the object, while the original calibrated view $I$ supplies the scene coordinates in which a contact mask must be drawn. Each mask marks a proposed footprint on the object surface, not the body's silhouette or the entire object.
 
-An image model receives the reference, original scene view, and contact specification, and proposes a distinct colored region for each required body-part contact. We extract the resulting masks and display them on the original view for evaluation. Let
-\begin{equation}
-\mathcal{Z}^{(r)}=\{Z_e^{(r)}\mid e\in\mathcal{E}_{\mathrm{obj}}\}
-\end{equation}
-denote the object-contact masks at refinement round $r$, where $\mathcal{E}_{\mathrm{obj}}$ contains the graph edges involving the target object.
+\emph{Propose and composite.} An image model receives $\hat I$, $I$, and the graph and paints one colored region per required object contact. We extract the regions by their assigned colors and composite the masks onto the untouched scene view. This preserves the calibrated canvas for inspection and projection, but it does not itself correct a misplaced mask.
 
-A vision-language evaluator compares these proposals with the reference interaction and the original scene. It checks whether required contacts are present, whether additional contacts have been introduced, and whether each region has the correct body-part assignment, surface location, and spatial extent. A region is assessed against the contact depicted in the reference, rather than accepted solely because it occupies a plausible part of the object.
+\emph{Check and correct.} A vision-language model compares the composite with $\hat I$ and $I$. It checks for missing or extra contacts, body-part assignment, surface location, and region size. When it rejects a proposal, its feedback asks the image model for specific changes, such as adding a missing hand contact or moving one onto the correct rail, while retaining regions judged satisfactory. The revised masks are extracted, composited, and checked again.
 
-The evaluator returns an acceptance decision $d^{(r)}$ and a correction instruction $a^{(r)}$:
-\begin{equation}
-(d^{(r)},a^{(r)})=\mathcal{V}\!\left(\hat I,I,G,\mathcal{Z}^{(r)}\right).
-\end{equation}
-When correction is required, the image model receives the previous proposal together with the feedback:
-\begin{equation}
-\mathcal{Z}^{(r+1)}=\mathcal{P}\!\left(\hat I,I,G,\mathcal{Z}^{(r)},a^{(r)}\right).
-\end{equation}
-Here, $\mathcal{P}$ includes image-based proposal generation and mask extraction. Feedback specifies local changes, such as moving a hand region onto the appropriate rail, reducing an oversized footprint, or adding a missing contact. Regions judged correct are instructed to remain unchanged.
-
-We retain the current masks when the evaluator accepts them or when the maximum number of refinement rounds is reached. The selected masks are denoted by $\Omega_e$. This feedback process makes contact localization an explicit intermediate estimate that can be inspected and corrected before it influences the body fit.
-
-Floor-support contacts are treated separately. For edges involving the floor, SAM~3~\cite{carion2025sam3} segments the visible floor in the original view. The resulting support region may be shared by multiple body parts, with their individual contact relationships maintained through the graph. Their precise placement is subsequently determined by body optimization.
+The loop stops when the evaluator accepts the masks or the round limit is reached. For successful runs, we denote the accepted mask for edge $e$ by $\Omega_e$. Acceptance is an automated judgment rather than proof of correct placement. If the limit is reached without acceptance, the last proposal is recorded as unaccepted; the default contact-estimation runner reports failure instead of treating it as verified. Floor-support edges follow a separate path: SAM~3~\cite{carion2025sam3} segments the visible floor in $I$, and body optimization determines where within that support region each part lands. These floor masks are not revised by the object-contact feedback loop.
 
 \subsection{Grounding contact regions in 3D}
 \label{sec:method-grounding}
 
-The calibrated camera connects the image-space contact masks to the reconstructed scene. For a scene point $\mathbf{x}$ expressed in camera coordinates, its image location is
+The calibrated camera connects the image-space contact masks to the reconstructed scene. For a scene point $\mathbf{x}=(X,Y,Z)^\top$ expressed in camera coordinates, let $f_x,f_y$ be the focal lengths and $(c_x,c_y)$ the principal point of the zero-skew intrinsics $K$. Its image location is
 \begin{equation}
-\pi_K(\mathbf{x})=\left(\frac{(K\mathbf{x})_1}{(K\mathbf{x})_3},\frac{(K\mathbf{x})_2}{(K\mathbf{x})_3}\right).
+\pi_K(\mathbf{x})=\left(f_x\frac{X}{Z}+c_x,\;f_y\frac{Y}{Z}+c_y\right).
 \end{equation}
 We rasterize the scene to identify the visible mesh faces covered by each mask. Visibility handling prevents surfaces behind the observed scene surface from being selected. We also filter disconnected surface components to reduce the inclusion of unrelated geometry.
 
 For each contact edge $e$, sampling the retained surface produces a scene target set $P_e$. This set is associated with the predefined body vertex subset $B_e$, establishing an explicit body-part-to-scene-region constraint. The target is a surface region within which the body can establish contact; it does not prescribe a fixed correspondence for every body vertex. All target sets remain fixed during optimization.
+
+% Sources: 3DHSI/06_Evaluate_Interaction/ablation_metrics.csv (geometry, CLIP, and diversity);
+% output_init/vlm.csv, output_round1/vlm.csv, and output/vlm.csv (VLM).
+% GVHMR entropy: author-provided recalculation, 2.510 (not reflected in the CSV).
+% Baselines: 3DHSI/evaluation_comparison/average_metrics.csv.
+% PROX CLIP: author-provided recalculation, 0.2710 (not reflected in the CSV).
+\begin{table*}[t]
+  \centering
+  \caption{Quantitative results over 23 interactions. GVHMR, single-shot contacts, the full method, PROX, and PhySIC use the same generated human image; GenZI may synthesize another pose, so its distance to image-conditioned reference contacts is omitted (dash). Contact distance is in centimetres and conditional penetration depth in millimetres. VLM criteria range from 1 to 5, with Overall their mean. Diversity across different interactions is descriptive. Bold indicates the highest values and lowest distance and penetration values; ties are bolded.}
+  \label{tab:quantitative}
+  \small
+  \setlength{\tabcolsep}{3pt}
+  \renewcommand{\arraystretch}{1.1}
+  \begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lrrrrrrrrrr@{}}
+    \toprule
+    & \multicolumn{2}{c}{Geometry} & Semantics & \multicolumn{5}{c}{VLM evaluation (1 to 5)} & \multicolumn{2}{c}{Diversity} \\
+    \cmidrule(lr){2-3}\cmidrule(lr){4-4}\cmidrule(lr){5-9}\cmidrule(l){10-11}
+    Setting & Contact$\downarrow$ & Pen.$\downarrow$ & CLIP$\uparrow$ & Obj.$\uparrow$ & Act.$\uparrow$ & Cont.$\uparrow$ & Phys.$\uparrow$ & Overall$\uparrow$ & Entropy & Spread \\
+    & (cm) & (mm) & & & & & & & & \\
+    \midrule
+    PROX~\cite{hassan2019prox} & 15.68 & 13.77 & 0.2710 & 4.52 & 3.57 & 3.04 & 3.35 & 3.62 & 2.427 & 2.574 \\
+    GenZI~\cite{li2024genzi} & -- & 17.95 & 0.2592 & 1.91 & 1.22 & 1.04 & 1.61 & 1.45 & 2.487 & 2.411 \\
+    PhySIC~\cite{muralidhar2025physic} & 16.56 & 13.97 & 0.2704 & 4.61 & 3.57 & 3.09 & 3.30 & 3.64 & 2.533 & 2.534 \\
+    \midrule
+    GVHMR initialization & 16.30 & 17.11 & 0.2704 & 4.22 & 2.96 & 2.35 & 3.13 & 3.16 & 2.510 & 2.651 \\
+    Single-shot contacts & 6.98 & 5.26 & 0.2712 & 4.70 & 3.61 & 3.04 & 3.43 & 3.70 & \textbf{2.548} & 2.575 \\
+    Full method & \textbf{3.87} & \textbf{5.11} & \textbf{0.2725} & \textbf{5.00} & \textbf{3.91} & \textbf{3.52} & \textbf{3.87} & \textbf{4.08} & \textbf{2.548} & \textbf{2.681} \\
+    \bottomrule
+  \end{tabular*}
+\end{table*}
+
 
 \subsection{Scene-aware body optimization}
 \label{sec:method-optimization}
@@ -217,16 +234,13 @@ Regularization limits departures from the initial human configuration. We penali
 \end{equation}
 where $h_{\mathrm{can}}$ is its canonical height at unit scale, $h_{\mathrm{tgt}}$ is the target stature, and $\sigma_h$ controls the tolerated deviation. A bounded scale parameterization further restricts size changes. Finally, a self-intersection penalty discourages collisions between body triangles~\cite{tzionas2016capturing}.
 
-We minimize the objective with Adam in two stages. The first updates translation and scale while preserving the initial orientation and articulation. The second also optimizes orientation and body pose, allowing local adjustments to satisfy the contact constraints. The scene geometry, body shape, and target regions remain fixed throughout. The optimized vertices are returned to scene coordinates using
-\begin{equation}
-V_i^w=R_{cw}^{\top}\left(V_i^c-\mathbf{t}_{cw}\right).
-\end{equation}
+We minimize the objective with Adam in two stages. The first updates translation and scale while preserving the initial orientation and articulation. The second also optimizes orientation and body pose, allowing local adjustments to satisfy the contact constraints. The scene geometry, body shape, and target regions remain fixed throughout. The optimized body is transformed back to scene coordinates for output and rendering.
 
 %-------------------------------------------------------------------------
 \section{Experiments and Results}
 \label{sec:experiments}
 
-We evaluate whether explicit scene contact localization improves static human-scene interaction synthesis, whether agentic verification improves the localized regions, and how the complete method compares with existing approaches. The evaluation examines contact localization before body fitting, geometric accuracy after optimization, and the quality of rendered interactions.
+We first test whether corrective feedback improves 2D contact masks and whether those changes improve the fitted body's 3D contact. We then compare the complete method with reference-conditioned reconstruction baselines and with a native instruction-conditioned synthesis method. The evaluation uses geometric measurements and automated assessments of rendered interactions.
 
 \subsection{Experimental setup}
 \label{sec:exp-setup}
@@ -235,25 +249,25 @@ We evaluate whether explicit scene contact localization improves static human-sc
 We evaluate on 23 interaction instructions across 15 reconstructed indoor scenes from ScanNet++~\cite{yeshwanth2023scannetpp}. Each interaction is specified by a language instruction, a calibrated RGB view, and the corresponding scene mesh. The instructions cover support interactions, such as sitting on furniture; functional interactions, such as operating a faucet or reaching for a lamp; and configurations requiring several simultaneous contacts, such as climbing a ladder or running on a treadmill. The geometric evaluation includes 82 body-part-to-scene contact relationships.
 
 \paragraph{Reference contact annotations.}
-We manually annotate the scene regions that participating body parts should contact. Annotations are drawn on the calibrated scene view, using the generated human reference to identify the intended contact configuration. The regions include a small margin around the apparent contact footprint to accommodate uncertainty in its extent. They are created independently of the predicted contact masks and used only for evaluation.
+We manually annotate the scene regions that participating body parts should contact. Annotations are drawn on the calibrated scene view, using the generated interaction image to identify the intended contact configuration. The regions include a small margin around the apparent contact footprint to accommodate uncertainty in its extent. They are created independently of the predicted contact masks and used only for evaluation.
 
 These annotations assess fidelity to the reference interaction. Since a language instruction can admit several valid poses, a different but plausible contact configuration may receive a larger localization error. We therefore interpret contact distance alongside semantic and rendered-interaction assessments.
 
 \paragraph{Implementation.}
-We generate five candidate human frames per interaction and use a vision-language model to select the reference according to the enhanced interaction prompt. Contact refinement runs for at most ten rounds. The selected reference also supplies the GVHMR initialization, and SAM~3 provides floor-support segmentation when required.
+We generate five candidate human frames per interaction and use a vision-language model to select a generated interaction image according to the enhanced interaction prompt. Contact refinement runs for at most ten rounds. The selected image also supplies the GVHMR initialization, and SAM~3 provides floor-support segmentation when required.
 
 Body optimization uses Adam with a learning rate of $10^{-3}$ for 2,000 iterations. The first 400 iterations optimize translation and scale; the remaining 1,600 also update orientation and body pose. The contact, penetration, pose, orientation, height, and self-intersection weights are $800$, $60$, $250$, $100$, $1$, and $10^{-3}$, respectively. The self-intersection term is disabled during the first stage, and the penetration clearance margin is zero. Each scene contact target contains 2,048 surface samples. Body shape remains fixed throughout optimization.
 
-\paragraph{Baselines.}
-We compare against PROX~\cite{hassan2019prox}, PhySIC~\cite{muralidhar2025physic}, and GenZI~\cite{li2024genzi}. PROX and PhySIC are evaluated as scene-aware reconstruction baselines using the generated human reference as image evidence.
+\paragraph{Comparison protocols.}
+PROX~\cite{hassan2019prox} and PhySIC~\cite{muralidhar2025physic} use the same generated interaction image $\hat I$ as our method. Manual contact annotations are defined for this depicted interaction, so contact distance compares how accurately these methods fit that shared reference. PhySIC additionally receives the original scene image, calibrated camera parameters, and depth rendered from the reference mesh, with scene scale fixed during optimization. PROX uses a scene TSDF constructed from mesh-rendered depth maps and registered ScanNet++ camera poses.
 
-We adapt the baselines to the calibrated ScanNet++ setting to reduce differences arising from scene reconstruction and alignment. PhySIC receives the original scene image, calibrated camera parameters, and scene depth rendered from the reference mesh, with scene scale fixed during optimization. For PROX and GenZI, we construct scene TSDFs from mesh-rendered depth maps using registered ScanNet++ camera poses. GenZI additionally receives a manually specified target-object anchor for interaction localization.
+GenZI~\cite{li2024genzi} instead runs its native synthesis pipeline: given the instruction and prepared scene, it generates its own human hypotheses and may produce a different valid realization of the interaction. We provide a scene TSDF built from registered views and a manually specified target-object anchor. Since the manual contact annotations refer to $\hat I$, we do not score GenZI's distance to those reference contacts. We retain reference-independent scene-penetration, CLIP, and rendered-interaction assessments, and interpret this as a comparison of complete synthesis outputs rather than of fitting to the same depicted pose.
 
 \subsection{Evaluation metrics}
 \label{sec:exp-metrics}
 
 \paragraph{Image-space contact localization.}
-We compare the first-round contact masks with the final masks after agentic refinement, using the same human reference and manual annotations. For predicted mask $\Omega^{\mathrm{pred}}$ and reference region $\Omega^{\mathrm{gt}}$, containment is defined as
+We compare the first-round contact masks with the final masks after agentic refinement, using the same generated interaction image and manual annotations. For predicted mask $\Omega^{\mathrm{pred}}$ and reference region $\Omega^{\mathrm{gt}}$, containment is defined as
 \begin{equation}
 C=\frac{|\Omega^{\mathrm{pred}}\cap\Omega^{\mathrm{gt}}|}{|\Omega^{\mathrm{pred}}|}.
 \end{equation}
@@ -262,7 +276,7 @@ Containment measures the fraction of a prediction lying within the annotated reg
 Centroid distance measures the Euclidean separation between predicted and reference mask centroids in pixels. In the image-space results reported here, localization averages describe nonempty predictions, while omitted contacts are reported separately as misses. For bilateral contacts, the evaluation permits a left/right reassignment when it reduces the summed centroid distance by more than $2\%$ of the image diagonal. The same rule is applied to both settings.
 
 \paragraph{Geometric contact accuracy.}
-Manual contact masks are projected onto the reconstructed scene to obtain reference target regions. For contact edge $e$, we measure the directed mean distance from its body contact vertices $B_e$ to the sampled reference surface $S_e$:
+Manual contact masks are projected onto the reconstructed scene to obtain reference target regions for our method, its ablations, PROX, and PhySIC. GenZI may depict a different valid pose, so this reference-conditioned measure is not reported for it. For contact edge $e$, we measure the directed mean distance from its body contact vertices $B_e$ to the sampled reference surface $S_e$:
 \begin{equation}
 D_e=\frac{1}{|B_e|}\sum_{i\in B_e}\min_{\mathbf{q}\in S_e}\|V_i-\mathbf{q}\|_2.
 \end{equation}
@@ -272,7 +286,7 @@ Distances are averaged first over contact edges within an interaction and then o
 We sample the scene surface within the evaluation crop and query the signed-distance field of the fitted body. Mean penetration is the average magnitude of negative signed distances, computed only over penetrating samples and set to zero when none penetrate. It measures collision severity rather than collision volume.
 
 \paragraph{Diversity.}
-We measure variation across the 23 synthesized interactions by clustering SMPL-X parameter vectors containing translation, global orientation, body pose, and shape. For each setting, feature dimensions are standardized across the evaluation set before $k$-means clustering with $k=15$. We report cluster-occupancy entropy, $H=-\sum_j p_j\log p_j$, where $p_j$ is the fraction of interactions assigned to cluster $j$, and cluster spread, the mean Euclidean distance from each standardized vector to its assigned cluster centre. Higher values indicate more even cluster occupancy and greater within-cluster variation, respectively. These set-level measures describe variation across different instructions and scenes, rather than alternative outputs for a single instruction, and are interpreted alongside interaction correctness.
+For descriptive context, we cluster SMPL-X parameter vectors across the 23 \emph{different} instructions and scenes. After standardizing translation, orientation, pose, and shape features, we apply $k$-means with $k=15$ and report cluster-occupancy entropy and within-cluster spread. These set-level statistics do not measure the diversity of outputs for one instruction or the correctness of a pose, so we do not treat a higher value as a quality ranking.
 
 \paragraph{Rendered-interaction quality.}
 We evaluate multiple rendered views of each interaction using CLIP~\cite{radford2021clip} and a vision-language rubric. CLIP measures cosine similarity between normalized image and instruction embeddings, averaged across views and then interactions. The vision-language evaluator receives the instruction and rendered views jointly, assigning scores from 1 to 5 for target-object correctness, action correctness, contact and spatial relationships, and physical plausibility. The overall score is the arithmetic mean of these four criteria.
@@ -302,105 +316,32 @@ Table~\ref{tab:contact-localization} compares single-shot contact estimation wit
 
 Agentic refinement improves both localization measures and removes the three omissions observed in the single-shot predictions. Mean containment increases from 0.60 to 0.74, while centroid distance decreases from 27.6 to 19.5 pixels. The results indicate that refinement improves the placement of predicted regions as well as their completeness.
 
-The qualitative examples show corrections to displaced regions, inappropriate mask extents, and missing contacts. These changes affect the geometric targets used during fitting. A mask placed beside a narrow rail may select a different scene surface when projected onto the mesh, so even a modest image-space displacement can produce a substantial error in the 3D target. The geometric evaluation below measures the resulting effect on body contact.
+The image-space gains matter because the selected masks become 3D fitting targets. A small displacement near a thin rail can select a different mesh surface when projected. The next subsection tests whether the improved mask localization carries through to final body contact; Figure~\ref{fig:agentic-contact} illustrates one missing-contact correction.
+
+\subsection{Effect on 3D body fitting}
+\label{sec:exp-ablation}
+
+The 2D mask results above establish that refinement changes the contact targets. We now test whether those changes improve the final 3D body. Table~\ref{tab:quantitative} includes three settings that separate geometric fitting from contact refinement. \emph{GVHMR initialization} uses the recovered body without scene-aware optimization. \emph{Single-shot contacts} applies the optimizer using first-round contact estimates. \emph{Full method} uses the refined contact regions. The latter two settings share the human initialization and optimization configuration.
+
+\paragraph{Effect of scene-aware optimization.}
+Using first-round contacts, fitting reduces mean reference-contact distance from 16.30 to 6.98~cm and mean penetration from 17.11 to 5.26~mm relative to the GVHMR initialization. The VLM contact score rises from 2.35 to 3.04. This comparison shows what scene-aware fitting contributes before the contact targets are refined.
+
+\paragraph{Effect of agentic refinement.}
+With the same human initialization and optimizer, replacing first-round masks with refined masks further lowers mean contact distance from 6.98 to 3.87~cm. Mean penetration remains similar (5.26 versus 5.11~mm), while the VLM contact score rises from 3.04 to 3.52. Together with the 2D containment increase and elimination of three missed masks in Table~\ref{tab:contact-localization}, this supports the narrower conclusion that corrective feedback makes contact estimation more robust and improves its downstream geometric target. It does not mean every accepted mask is correctly placed.
+
+The other VLM criteria also rise, giving overall scores of 3.16, 3.70, and 4.08 for the initialization, single-shot, and full settings. CLIP and the descriptive across-interaction diversity statistics change little; neither explains the main contact-distance gain.
 
 \subsection{Comparison with existing methods}
 \label{sec:exp-comparison}
 
-Table~\ref{tab:method-comparison} reports geometric, semantic, VLM, and diversity results for the complete method and the three baselines.
+Table~\ref{tab:quantitative} also compares the full method with PROX, PhySIC, and GenZI. GenZI's reference-contact distance is omitted because its generated pose need not match the shared image; its VLM contact score assesses visible body-scene relationships in its own rendered output.
 
-% Sources: 3DHSI/evaluation_comparison/average_metrics.csv;
-% 3DHSI/06_Evaluate_Interaction/output/vlm.csv (full-method VLM).
-% PROX CLIP: author-provided recalculation, 0.2710 (not reflected in the CSV).
-\begin{table*}[t]
-  \centering
-  \caption{Comparison with existing methods over 23 interactions. Contact distance and penetration are averaged over interactions; penetration is conditioned on penetrating scene samples within each interaction. Diversity reports cluster-occupancy entropy and mean within-cluster spread in standardized parameter space. VLM criteria assess target object, action, contact, and physical plausibility; Overall is their mean. The best displayed values are bold.}
-  \label{tab:method-comparison}
-  \small
-  \setlength{\tabcolsep}{3pt}
-  \renewcommand{\arraystretch}{1.1}
-  \begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lrrrrrrrrrr@{}}
-    \toprule
-    & \multicolumn{2}{c}{Geometry} & Semantics & \multicolumn{5}{c}{VLM evaluation (1 to 5)} & \multicolumn{2}{c}{Diversity} \\
-    \cmidrule(lr){2-3}\cmidrule(lr){4-4}\cmidrule(lr){5-9}\cmidrule(l){10-11}
-    Setting & Contact$\downarrow$ & Pen.$\downarrow$ & CLIP$\uparrow$ & Obj.$\uparrow$ & Act.$\uparrow$ & Cont.$\uparrow$ & Phys.$\uparrow$ & Overall$\uparrow$ & Entropy$\uparrow$ & Spread$\uparrow$ \\
-    & (cm) & (mm) & & & & & & & & \\
-    \midrule
-    PROX~\cite{hassan2019prox} & 15.68 & 13.77 & 0.2710 & 4.52 & 3.57 & 3.04 & 3.35 & 3.62 & 2.427 & 2.574 \\
-    PhySIC~\cite{muralidhar2025physic} & 16.56 & 13.97 & 0.2704 & 4.61 & 3.57 & 3.09 & 3.30 & 3.64 & 2.533 & 2.534 \\
-    GenZI~\cite{li2024genzi} & 62.72 & 17.95 & 0.2592 & 1.91 & 1.22 & 1.04 & 1.61 & 1.45 & 2.487 & 2.411 \\
-    Full method & \textbf{3.87} & \textbf{5.11} & \textbf{0.2725} & \textbf{5.00} & \textbf{3.91} & \textbf{3.52} & \textbf{3.87} & \textbf{4.08} & \textbf{2.548} & \textbf{2.681} \\
-    \bottomrule
-  \end{tabular*}
-\end{table*}
+For the shared generated interaction, the full method has a mean contact distance of 3.87~cm, versus 15.68~cm for PROX and 16.56~cm for PhySIC. It also has lower mean penetration. PhySIC receives reference scene geometry, so the contact comparison is less affected by differences in scene reconstruction. These measurements assess fitting to the depicted contact configuration, not the entire instruction-conditioned synthesis problem.
 
-The full method achieves the lowest mean contact distance, at 3.87~cm, compared with 15.68~cm for PROX, 16.56~cm for PhySIC, and 62.72~cm for GenZI. It also achieves the lowest mean penetration. The improvement over PhySIC remains present when the baseline receives reference scene geometry, supporting the value of explicitly localized contact targets beyond access to calibrated scene information.
+Across all rendered outputs, the full method receives the highest VLM overall score, 4.08, compared with 3.62 for PROX, 3.64 for PhySIC, and 1.45 for GenZI. Its contact and physical-plausibility scores agree in direction with the geometric measures for the shared-reference methods. GenZI's object and action scores are lower in this evaluation, but its native generation path can produce a different pose; the comparison does not isolate contact localization as the cause.
 
-The full method obtains the highest VLM score on each criterion, reaching an overall score of 4.08, compared with 3.64 for PhySIC, 3.62 for PROX, and 1.45 for GenZI. Its higher contact and physical-plausibility scores provide complementary evidence to the geometric measurements. GenZI's low object and action scores suggest that its errors in this evaluation extend beyond small contact offsets. These results characterize the evaluated configurations and interaction set.
+CLIP scores differ little among the full method, PROX, and PhySIC (0.2725, 0.2710, and 0.2704). Broad image-text agreement therefore does not capture their larger differences in reference-contact accuracy. The diversity statistics describe variation across the tested interactions, not the number of valid alternatives for one instruction.
 
-The full method obtains the highest CLIP score, at 0.2725, compared with 0.2710 for PROX, 0.2704 for PhySIC, and 0.2592 for GenZI. The small differences among the first three methods contrast with their larger differences in contact accuracy, supporting the use of geometric measurements alongside semantic similarity.
-
-The full method also obtains the highest diversity entropy and cluster spread among the compared methods, at 2.548 and 2.681, respectively. These measurements describe variation across the evaluated interactions; they do not establish the correctness of individual poses.
-
-\subsection{Ablation studies}
-\label{sec:exp-ablation}
-
-We evaluate three settings to separate the effects of geometric fitting and contact refinement. \emph{GVHMR initialization} uses the recovered body without scene-aware optimization. \emph{Single-shot contacts} applies the optimizer using first-round contact estimates. \emph{Full method} uses the refined contact regions. The latter two settings share the human initialization and optimization configuration.
-
-% Sources: 3DHSI/06_Evaluate_Interaction/ablation_metrics.csv (geometry, CLIP, and diversity);
-% output_init/vlm.csv, output_round1/vlm.csv, and output/vlm.csv (VLM).
-% GVHMR entropy: author-provided recalculation, 2.510 (not reflected in the CSV).
-\begin{table*}[t]
-  \centering
-  \caption{Ablation of scene-aware optimization and agentic contact refinement over 23 interactions. Units and VLM criteria follow Table~\ref{tab:method-comparison}. The best displayed values are bold.}
-  \label{tab:ablation}
-  \small
-  \setlength{\tabcolsep}{3pt}
-  \renewcommand{\arraystretch}{1.1}
-  \begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lrrrrrrrrrr@{}}
-    \toprule
-    & \multicolumn{2}{c}{Geometry} & Semantics & \multicolumn{5}{c}{VLM evaluation (1 to 5)} & \multicolumn{2}{c}{Diversity} \\
-    \cmidrule(lr){2-3}\cmidrule(lr){4-4}\cmidrule(lr){5-9}\cmidrule(l){10-11}
-    Setting & Contact$\downarrow$ & Pen.$\downarrow$ & CLIP$\uparrow$ & Obj.$\uparrow$ & Act.$\uparrow$ & Cont.$\uparrow$ & Phys.$\uparrow$ & Overall$\uparrow$ & Entropy$\uparrow$ & Spread$\uparrow$ \\
-    & (cm) & (mm) & & & & & & & & \\
-    \midrule
-    GVHMR initialization & 16.30 & 17.11 & 0.2704 & 4.22 & 2.96 & 2.35 & 3.13 & 3.16 & 2.510 & 2.651 \\
-    Single-shot contacts & 6.98 & 5.26 & 0.2712 & 4.70 & 3.61 & 3.04 & 3.43 & 3.70 & \textbf{2.548} & 2.575 \\
-    Full method & \textbf{3.87} & \textbf{5.11} & \textbf{0.2725} & \textbf{5.00} & \textbf{3.91} & \textbf{3.52} & \textbf{3.87} & \textbf{4.08} & \textbf{2.548} & \textbf{2.681} \\
-    \bottomrule
-  \end{tabular*}
-\end{table*}
-
-Table~\ref{tab:ablation} combines geometric, semantic, VLM, and diversity measurements for these settings.
-
-\paragraph{Effect of scene-aware optimization.}
-Fitting with single-shot contacts reduces mean contact distance from 16.30 to 6.98~cm and mean penetration from 17.11 to 5.26~mm. A body recovered from the reference image therefore benefits substantially from explicit geometric constraints, even before contact refinement is introduced. The VLM contact score increases from 2.35 to 3.04 and the overall score from 3.16 to 3.70.
-
-\paragraph{Effect of agentic refinement.}
-Replacing first-round targets with refined targets further reduces contact distance from 6.98 to 3.87~cm. Mean penetration changes only slightly, from 5.26 to 5.11~mm. The full method also obtains the highest CLIP score. Agentic refinement improves all four VLM criteria: the contact score increases from 3.04 to 3.52, physical plausibility from 3.43 to 3.87, and the overall score from 3.70 to 4.08. Together with the image-space results, these findings support improved contact localization and rendered-interaction quality through refinement, while both fitted variants benefit from the shared collision objective.
-
-Diversity remains similar across the ablations. Entropy increases from 2.510 for the initialization to 2.548 for both fitted settings, while cluster spread is 2.651, 2.575, and 2.681 for the initialization, single-shot contacts, and full method, respectively. The contact improvements are thus accompanied by comparable variation in the standardized body parameters.
-
-The qualitative ablation is examined from multiple viewpoints. The initial body may appear aligned in the reference view while remaining separated from a contact surface in 3D. Optimization improves this alignment, but an incorrectly localized target can still attract a body part toward the wrong region. Correcting the target before fitting addresses this source of error.
-
-\subsection{Limitations and failure cases}
-\label{sec:exp-limitations}
-
-Repeated structures remain challenging for contact localization. On a ladder, visually similar rungs can cause a predicted contact to be assigned to an adjacent rung. The fitted body may then form a plausible interaction at the wrong location. This failure distinguishes fidelity to the reference contact from general visual plausibility and shows that VLM acceptance does not guarantee correct localization.
-
-The method also depends on the quality of the initial body estimate. In a lying-on-sofa example, monocular recovery fails to reproduce the pose shown in the generated reference. Because optimization regularizes the body toward its initialization, it cannot recover the intended configuration through local refinement alone.
-
-More generally, scene targets depend on the visibility of the contacted surface and the quality of the reconstructed geometry. The method synthesizes a static configuration with fixed scene geometry and does not establish dynamic balance or simulate object manipulation. Finally, the evaluation covers a limited set of indoor interactions, and the automated VLM assessment does not replace a controlled human perceptual study.
-
-%-------------------------------------------------------------------------
-\section{Conclusion and Future Work}
-\label{sec:conclusion}
-
-We presented Agentic Contact, a zero-shot method for synthesizing static human-scene interactions from a language instruction, a calibrated RGB view, and a reconstructed scene mesh, without training on paired 3D interaction data. The method explicitly localizes scene regions for participating body parts, refines these regions through agentic verification, and grounds them in 3D to guide SMPL-X body optimization. Across the evaluated interactions, the full method achieves more accurate contact and higher VLM ratings of rendered interactions than the compared baselines. The ablations further support the contributions of scene-aware optimization and contact refinement. These results demonstrate the value of explicitly identifying where each body part should contact the scene when fitting a human body to an intended interaction.
-
-Two directions follow from this work. First, contact verification could incorporate the positions of proposed regions on the 3D scene mesh and views from additional camera angles. This would provide further evidence for assessing whether a region lies on the intended surface, particularly when nearby or repeated structures are ambiguous in the reference view. Second, extending the method to temporal interactions would require representing how contacts are established, maintained, and released over time. Such an extension would need to coordinate contact transitions with continuous body motion and account for physical stability beyond the static configurations considered here.
-
-%-------------------------------------------------------------------------
 \bibliographystyle{eg-alpha-doi}
 \bibliography{references}
 
