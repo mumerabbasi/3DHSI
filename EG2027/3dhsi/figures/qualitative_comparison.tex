@@ -1,0 +1,40 @@
+% Full-width qualitative comparison. Source images and matched view IDs are
+% recorded in figures/qualitative/manifest.json.
+\newcommand{\qualcompinput}[2]{%
+  \begin{minipage}[c][31mm][c]{0.183\textwidth}
+    \centering\scriptsize\bfseries #2\par\smallskip
+    \includegraphics[width=\linewidth,height=22mm,keepaspectratio]{figures/qualitative/#1_scene.jpg}
+  \end{minipage}}
+
+\newcommand{\qualcomprender}[2]{%
+  \begin{minipage}[c][31mm][c]{0.183\textwidth}
+    \centering
+    \includegraphics[width=\linewidth,height=30mm,keepaspectratio]{figures/qualitative/#1_#2.jpg}
+  \end{minipage}}
+
+\newcommand{\qualcomprow}[2]{%
+  \qualcompinput{#1}{#2} &
+  \qualcomprender{#1}{genzi} &
+  \qualcomprender{#1}{prox} &
+  \qualcomprender{#1}{physic} &
+  \qualcomprender{#1}{ours} \\
+  \addlinespace[1mm]}
+
+\begin{figure*}[p]
+  \centering
+  \setlength{\tabcolsep}{2pt}
+  \begin{tabular}{@{}ccccc@{}}
+    \toprule
+    Input instruction and scene & GenZI & PROX & PhySIC & Ours \\
+    \midrule
+    \qualcomprow{curtain}{Opening a curtain}
+    \qualcomprow{table}{Sitting on the wooden table}
+    \qualcomprow{bicyclesit}{Sitting on a bicycle}
+    \qualcomprow{staircasebed}{Climbing onto the top bed}
+    \qualcomprow{bicyclestand}{Removing the bicycle from its stand}
+    \qualcomprow{ladderdown}{Stepping down from the ladder}
+    \bottomrule
+  \end{tabular}
+  \caption{Qualitative comparison of six interactions. Our method takes a text instruction, a calibrated RGB scene view, and a reconstructed scene mesh, and generates an image of a person performing the interaction. PROX and PhySIC use this same generated human frame for fitting, whereas GenZI generates its own image hypotheses. Each row shows one common evaluation camera view for the four rendered outputs.}
+  \label{fig:qualitative-comparison}
+\end{figure*}

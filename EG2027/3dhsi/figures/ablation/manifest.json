@@ -1,0 +1,71 @@
+[
+  {
+    "slug": "cupboard",
+    "interaction_id": "24",
+    "views": [
+      3
+    ],
+    "sources": {
+      "scene": "3DHSI/02_Generate_Human_Frame/output/interaction_24/prompt/scene_image.png",
+      "human": "Thesis/figures/agentic_contact/cupboard_human.jpg",
+      "singleshot": "Thesis/figures/agentic_contact/cupboard_singleshot.jpg",
+      "agentic": "Thesis/figures/agentic_contact/cupboard_agentic.jpg",
+      "single_v03": "3DHSI/06_Evaluate_Interaction/output_round1/interaction_24/semantics/renders/view_03.png",
+      "ours_v03": "3DHSI/06_Evaluate_Interaction/output/interaction_24/semantics/renders/view_03.png"
+    },
+    "figure_files": {
+      "scene": "cupboard_scene.jpg",
+      "human": "cupboard_human.jpg",
+      "singleshot": "cupboard_singleshot.jpg",
+      "agentic": "cupboard_agentic.jpg",
+      "single_v03": "cupboard_single_v03.jpg",
+      "ours_v03": "cupboard_ours_v03.jpg"
+    }
+  },
+  {
+    "slug": "bicycle",
+    "interaction_id": "22",
+    "views": [
+      1
+    ],
+    "sources": {
+      "scene": "3DHSI/02_Generate_Human_Frame/output/interaction_22/prompt/scene_image.png",
+      "human": "Thesis/figures/agentic_contact/bicycle_human.jpg",
+      "singleshot": "Thesis/figures/agentic_contact/bicycle_singleshot.jpg",
+      "agentic": "Thesis/figures/agentic_contact/bicycle_agentic.jpg",
+      "single_v01": "3DHSI/06_Evaluate_Interaction/output_round1/interaction_22/semantics/renders/view_01.png",
+      "ours_v01": "3DHSI/06_Evaluate_Interaction/output/interaction_22/semantics/renders/view_01.png"
+    },
+    "figure_files": {
+      "scene": "bicycle_scene.jpg",
+      "human": "bicycle_human.jpg",
+      "singleshot": "bicycle_singleshot.jpg",
+      "agentic": "bicycle_agentic.jpg",
+      "single_v01": "bicycle_single_v01.jpg",
+      "ours_v01": "bicycle_ours_v01.jpg"
+    }
+  },
+  {
+    "slug": "table",
+    "interaction_id": "02",
+    "views": [
+      4
+    ],
+    "sources": {
+      "scene": "3DHSI/02_Generate_Human_Frame/output/interaction_02/prompt/scene_image.png",
+      "human": "Thesis/figures/agentic_contact/table_human.jpg",
+      "singleshot": "Thesis/figures/agentic_contact/table_singleshot.jpg",
+      "agentic": "Thesis/figures/agentic_contact/table_agentic.jpg",
+      "single_v04": "3DHSI/06_Evaluate_Interaction/output_round1/interaction_02/semantics/renders/view_04.png",
+      "ours_v04": "3DHSI/06_Evaluate_Interaction/output/interaction_02/semantics/renders/view_04.png"
+    },
+    "figure_files": {
+      "scene": "table_scene.jpg",
+      "human": "table_human.jpg",
+      "singleshot": "table_singleshot.jpg",
+      "agentic": "table_agentic.jpg",
+      "single_v04": "table_single_v04.jpg",
+      "ours_v04": "table_ours_v04.jpg"
+    }
+  }
+]

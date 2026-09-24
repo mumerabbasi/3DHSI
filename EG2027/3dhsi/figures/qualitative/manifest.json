@@ -1,0 +1,122 @@
+[
+  {
+    "slug": "curtain",
+    "interaction_id": "07",
+    "view": 1,
+    "short_prompt": "Opening a curtain",
+    "sources": {
+      "scene": "3DHSI/02_Generate_Human_Frame/output/interaction_07/prompt/scene_image.png",
+      "prox": "3DHSI/08_Run_Prox/evaluation/output/interaction_07/semantics/renders/view_01.png",
+      "physic": "3DHSI/07_Run_PhySIC/evaluation/output/interaction_07/semantics/renders/view_01.png",
+      "genzi": "3DHSI/09_Run_Genzi/evaluation/output/interaction_07/semantics/renders/view_01.png",
+      "ours": "3DHSI/06_Evaluate_Interaction/output/interaction_07/semantics/renders/view_01.png"
+    },
+    "figure_files": {
+      "scene": "curtain_scene.jpg",
+      "genzi": "curtain_genzi.jpg",
+      "prox": "curtain_prox.jpg",
+      "physic": "curtain_physic.jpg",
+      "ours": "curtain_ours.jpg"
+    }
+  },
+  {
+    "slug": "table",
+    "interaction_id": "02",
+    "view": 5,
+    "short_prompt": "Sitting on the wooden table",
+    "sources": {
+      "scene": "3DHSI/02_Generate_Human_Frame/output/interaction_02/prompt/scene_image.png",
+      "prox": "3DHSI/08_Run_Prox/evaluation/output/interaction_02/semantics/renders/view_05.png",
+      "physic": "3DHSI/07_Run_PhySIC/evaluation/output/interaction_02/semantics/renders/view_05.png",
+      "genzi": "3DHSI/09_Run_Genzi/evaluation/output/interaction_02/semantics/renders/view_05.png",
+      "ours": "3DHSI/06_Evaluate_Interaction/output/interaction_02/semantics/renders/view_05.png"
+    },
+    "figure_files": {
+      "scene": "table_scene.jpg",
+      "genzi": "table_genzi.jpg",
+      "prox": "table_prox.jpg",
+      "physic": "table_physic.jpg",
+      "ours": "table_ours.jpg"
+    }
+  },
+  {
+    "slug": "bicyclesit",
+    "interaction_id": "14",
+    "view": 5,
+    "short_prompt": "Sitting on a bicycle",
+    "sources": {
+      "scene": "3DHSI/02_Generate_Human_Frame/output/interaction_14/prompt/scene_image.png",
+      "prox": "3DHSI/08_Run_Prox/evaluation/output/interaction_14/semantics/renders/view_05.png",
+      "physic": "3DHSI/07_Run_PhySIC/evaluation/output/interaction_14/semantics/renders/view_05.png",
+      "genzi": "3DHSI/09_Run_Genzi/evaluation/output/interaction_14/semantics/renders/view_05.png",
+      "ours": "3DHSI/06_Evaluate_Interaction/output/interaction_14/semantics/renders/view_05.png"
+    },
+    "figure_files": {
+      "scene": "bicyclesit_scene.jpg",
+      "genzi": "bicyclesit_genzi.jpg",
+      "prox": "bicyclesit_prox.jpg",
+      "physic": "bicyclesit_physic.jpg",
+      "ours": "bicyclesit_ours.jpg"
+    }
+  },
+  {
+    "slug": "staircasebed",
+    "interaction_id": "18",
+    "view": 6,
+    "short_prompt": "Climbing onto the top bed",
+    "sources": {
+      "scene": "3DHSI/02_Generate_Human_Frame/output/interaction_18/prompt/scene_image.png",
+      "prox": "3DHSI/08_Run_Prox/evaluation/output/interaction_18/semantics/renders/view_06.png",
+      "physic": "3DHSI/07_Run_PhySIC/evaluation/output/interaction_18/semantics/renders/view_06.png",
+      "genzi": "3DHSI/09_Run_Genzi/evaluation/output/interaction_18/semantics/renders/view_06.png",
+      "ours": "3DHSI/06_Evaluate_Interaction/output/interaction_18/semantics/renders/view_06.png"
+    },
+    "figure_files": {
+      "scene": "staircasebed_scene.jpg",
+      "genzi": "staircasebed_genzi.jpg",
+      "prox": "staircasebed_prox.jpg",
+      "physic": "staircasebed_physic.jpg",
+      "ours": "staircasebed_ours.jpg"
+    }
+  },
+  {
+    "slug": "bicyclestand",
+    "interaction_id": "22",
+    "view": 1,
+    "short_prompt": "Removing the bicycle from its stand",
+    "sources": {
+      "scene": "3DHSI/02_Generate_Human_Frame/output/interaction_22/prompt/scene_image.png",
+      "prox": "3DHSI/08_Run_Prox/evaluation/output/interaction_22/semantics/renders/view_01.png",
+      "physic": "3DHSI/07_Run_PhySIC/evaluation/output/interaction_22/semantics/renders/view_01.png",
+      "genzi": "3DHSI/09_Run_Genzi/evaluation/output/interaction_22/semantics/renders/view_01.png",
+      "ours": "3DHSI/06_Evaluate_Interaction/output/interaction_22/semantics/renders/view_01.png"
+    },
+    "figure_files": {
+      "scene": "bicyclestand_scene.jpg",
+      "genzi": "bicyclestand_genzi.jpg",
+      "prox": "bicyclestand_prox.jpg",
+      "physic": "bicyclestand_physic.jpg",
+      "ours": "bicyclestand_ours.jpg"
+    }
+  },
+  {
+    "slug": "ladderdown",
+    "interaction_id": "30",
+    "view": 1,
+    "short_prompt": "Stepping down from the ladder",
+    "sources": {
+      "scene": "3DHSI/02_Generate_Human_Frame/output/interaction_30/prompt/scene_image.png",
+      "prox": "3DHSI/08_Run_Prox/evaluation/output/interaction_30/semantics/renders/view_01.png",
+      "physic": "3DHSI/07_Run_PhySIC/evaluation/output/interaction_30/semantics/renders/view_01.png",
+      "genzi": "3DHSI/09_Run_Genzi/evaluation/output/interaction_30/semantics/renders/view_01.png",
+      "ours": "3DHSI/06_Evaluate_Interaction/output/interaction_30/semantics/renders/view_01.png"
+    },
+    "figure_files": {
+      "scene": "ladderdown_scene.jpg",
+      "genzi": "ladderdown_genzi.jpg",
+      "prox": "ladderdown_prox.jpg",
+      "physic": "ladderdown_physic.jpg",
+      "ours": "ladderdown_ours.jpg"
+    }
+  }
+]
