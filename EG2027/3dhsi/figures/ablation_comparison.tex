@@ -1,10 +1,10 @@
 % Three interactions in the order of figures/ablation/manifest.json.
 % Each row uses one camera view from
 % 3DHSI/00_Visualizations_Thesis/paper_render_selection.json.
-\newcommand{\ablationinput}[2]{%
+\newcommand{\ablationinput}[6]{%
   \begin{minipage}[c][32mm][c]{28mm}
     \centering\scriptsize\bfseries #2\par\smallskip
-    \includegraphics[width=28mm,height=19mm,keepaspectratio]{figures/ablation/#1_scene.jpg}
+    \includegraphics[trim=#3bp #4bp #5bp #6bp,clip,width=22mm,height=22mm,keepaspectratio]{figures/ablation/#1_scene.jpg}
   \end{minipage}}
 
 \newcommand{\ablationcrop}[2]{%
@@ -19,8 +19,8 @@
     \includegraphics[width=28mm,height=28mm,keepaspectratio]{figures/ablation/#1_#2_v#3.jpg}
   \end{minipage}}
 
-\newcommand{\ablationrow}[3]{%
-  \ablationinput{#1}{#2} &
+\newcommand{\ablationrow}[7]{%
+  \ablationinput{#1}{#2}{#4}{#5}{#6}{#7} &
   \ablationcrop{#1}{human} &
   \ablationcrop{#1}{singleshot} &
   \ablationcrop{#1}{agentic} &
@@ -40,11 +40,11 @@
     \shortstack{Single-shot\\fit} &
     \shortstack{Ours\\fit} \\
     \midrule
-    \ablationrow{cupboard}{Reaching the cupboard top from a step ladder}{03}
-    \ablationrow{bicycle}{Removing the bicycle from its stand}{01}
-    \ablationrow{table}{Sitting on the wooden table}{04}
+    \ablationrow{cupboard}{Reaching the cupboard top from a step ladder}{03}{98}{29}{231}{0}
+    \ablationrow{bicycle}{Removing the bicycle from its stand}{01}{112}{63}{307}{56}
+    \ablationrow{table}{Sitting on the wooden table}{04}{311}{39}{219}{191}
     \bottomrule
   \end{tabular}
-  \caption{Qualitative ablation results for three interactions. The input comprises the instruction, calibrated scene view shown, and reconstructed scene mesh. Each row compares the generated human frame with scene-side contact regions proposed in one pass and after agentic refinement. The last two columns show bodies fitted with the respective contact regions from the same initialization and optimizer, rendered from one matched camera view per interaction. Colored regions mark body-part-specific scene contacts.}
+  \caption{Qualitative ablation results for three interactions. Each row compares the generated human frame with scene-side contact regions proposed in one pass and after agentic refinement. Colored regions mark body-part-specific scene contacts. The last two columns show bodies fitted with the respective contact regions from the same initialization and optimizer.}
   \label{fig:ablation-comparison}
 \end{figure*}

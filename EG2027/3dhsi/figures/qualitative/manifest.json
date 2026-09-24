@@ -17,7 +17,14 @@
       "prox": "curtain_prox.jpg",
       "physic": "curtain_physic.jpg",
       "ours": "curtain_ours.jpg"
-    }
+    },
+    "scene_display_crop_xyxy": [
+      1006,
+      298,
+      1510,
+      802
+    ],
+    "scene_display_crop_source": "3DHSI/03_Estimate_Contact_Agentic/output/interaction_07/assets/target_scene_crop.png"
   },
   {
     "slug": "table",
@@ -37,7 +44,14 @@
       "prox": "table_prox.jpg",
       "physic": "table_physic.jpg",
       "ours": "table_ours.jpg"
-    }
+    },
+    "scene_display_crop_xyxy": [
+      605,
+      372,
+      1325,
+      1092
+    ],
+    "scene_display_crop_source": "3DHSI/03_Estimate_Contact_Agentic/output/interaction_02/assets/target_scene_crop.png"
   },
   {
     "slug": "bicyclesit",
@@ -57,7 +71,14 @@
       "prox": "bicyclesit_prox.jpg",
       "physic": "bicyclesit_physic.jpg",
       "ours": "bicyclesit_ours.jpg"
-    }
+    },
+    "scene_display_crop_xyxy": [
+      602,
+      22,
+      1368,
+      788
+    ],
+    "scene_display_crop_source": "3DHSI/03_Estimate_Contact_Agentic/output/interaction_14/assets/target_scene_crop.png"
   },
   {
     "slug": "staircasebed",
@@ -77,7 +98,14 @@
       "prox": "staircasebed_prox.jpg",
       "physic": "staircasebed_physic.jpg",
       "ours": "staircasebed_ours.jpg"
-    }
+    },
+    "scene_display_crop_xyxy": [
+      250,
+      114,
+      1040,
+      904
+    ],
+    "scene_display_crop_source": "3DHSI/03_Estimate_Contact_Agentic/output/interaction_18/assets/target_scene_crop.png"
   },
   {
     "slug": "bicyclestand",
@@ -97,7 +125,14 @@
       "prox": "bicyclestand_prox.jpg",
       "physic": "bicyclestand_physic.jpg",
       "ours": "bicyclestand_ours.jpg"
-    }
+    },
+    "scene_display_crop_xyxy": [
+      219,
+      110,
+      1155,
+      1046
+    ],
+    "scene_display_crop_source": "3DHSI/03_Estimate_Contact_Agentic/output/interaction_22/assets/target_scene_crop.png"
   },
   {
     "slug": "ladderdown",
@@ -117,6 +152,13 @@
       "prox": "ladderdown_prox.jpg",
       "physic": "ladderdown_physic.jpg",
       "ours": "ladderdown_ours.jpg"
-    }
+    },
+    "scene_display_crop_xyxy": [
+      362,
+      0,
+      1419,
+      1057
+    ],
+    "scene_display_crop_source": "3DHSI/03_Estimate_Contact_Agentic/output/interaction_30/assets/target_scene_crop.png"
   }
 ]

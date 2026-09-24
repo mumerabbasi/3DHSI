@@ -163,13 +163,12 @@ We rasterize the scene to identify the visible mesh faces covered by each mask. 
 For each contact edge $e$, sampling the retained surface produces a scene target set $P_e$. This set is associated with the predefined body vertex subset $B_e$, establishing an explicit body-part-to-scene-region constraint. The target is a surface region within which the body can establish contact; it does not prescribe a fixed correspondence for every body vertex. All target sets remain fixed during optimization.
 
 % Sources: 3DHSI/06_Evaluate_Interaction/ablation_metrics.csv (geometry, CLIP, and diversity);
-% output_init/vlm.csv, output_round1/vlm.csv, and output/vlm.csv (VLM).
-% GVHMR entropy: author-provided recalculation, 2.510 (not reflected in the CSV).
+% output_round1/vlm.csv and output/vlm.csv (VLM).
 % Baselines: 3DHSI/evaluation_comparison/average_metrics.csv.
 % PROX CLIP: author-provided recalculation, 0.2710 (not reflected in the CSV).
 \begin{table*}[t]
   \centering
-  \caption{Quantitative results over 23 interactions. GVHMR, single-shot contacts, the full method, PROX, and PhySIC use the same generated human image; GenZI may synthesize another pose, so its distance to image-conditioned reference contacts is omitted (dash). Contact distance is in centimetres and conditional penetration depth in millimetres. VLM criteria range from 1 to 5, with Overall their mean. Diversity across different interactions is descriptive. Bold indicates the highest values and lowest distance and penetration values; ties are bolded.}
+  \caption{Quantitative results over 23 interactions. Single-shot contacts, the full method, PROX, and PhySIC use the same generated human image; GenZI may synthesize another pose, so its distance to image-conditioned reference contacts is omitted (dash). Contact distance is in centimetres and conditional penetration depth in millimetres. VLM criteria range from 1 to 5, with Overall their mean. Diversity across different interactions is descriptive. Bold marks the lowest geometry values and highest remaining values, including ties.}
   \label{tab:quantitative}
   \small
   \setlength{\tabcolsep}{3pt}
@@ -185,7 +184,6 @@ For each contact edge $e$, sampling the retained surface produces a scene target
     GenZI~\cite{li2024genzi} & -- & 17.95 & 0.2592 & 1.91 & 1.22 & 1.04 & 1.61 & 1.45 & 2.487 & 2.411 \\
     PhySIC~\cite{muralidhar2025physic} & 16.56 & 13.97 & 0.2704 & 4.61 & 3.57 & 3.09 & 3.30 & 3.64 & 2.533 & 2.534 \\
     \midrule
-    GVHMR initialization & 16.30 & 17.11 & 0.2704 & 4.22 & 2.96 & 2.35 & 3.13 & 3.16 & 2.510 & 2.651 \\
     Single-shot contacts & 6.98 & 5.26 & 0.2712 & 4.70 & 3.61 & 3.04 & 3.43 & 3.70 & \textbf{2.548} & 2.575 \\
     Full method & \textbf{3.87} & \textbf{5.11} & \textbf{0.2725} & \textbf{5.00} & \textbf{3.91} & \textbf{3.52} & \textbf{3.87} & \textbf{4.08} & \textbf{2.548} & \textbf{2.681} \\
     \bottomrule
@@ -339,15 +337,10 @@ Agentic refinement improves both localization measures and removes the three omi
 
 The selected masks become 3D fitting targets, so a small displacement near a thin rail can select a different mesh surface when projected. Figure~\ref{fig:agentic-contact} illustrates one missing-contact correction. Figure~\ref{fig:ablation-comparison} follows three interactions from contact estimation through to the fitted 3D bodies. We next test whether improved localization carries through to final body contact.
 
-\paragraph{Scene-aware fitting.}
-Table~\ref{tab:quantitative} includes three settings that separate geometric fitting from contact refinement. \emph{GVHMR initialization} uses the recovered body without scene-aware optimization. \emph{Single-shot contacts} applies the optimizer using first-round contact estimates. \emph{Full method} uses the refined contact regions. The latter two settings share the human initialization and optimization configuration.
-
-Using first-round contacts, fitting reduces mean reference-contact distance from 16.30 to 6.98~cm and mean penetration from 17.11 to 5.26~mm relative to the GVHMR initialization. The VLM contact score rises from 2.35 to 3.04. This comparison shows what scene-aware fitting contributes before the contact targets are refined.
-
 \paragraph{Effect of agentic refinement on 3D contacts.}
-With the same human initialization and optimizer, replacing first-round masks with refined masks further lowers mean contact distance from 6.98 to 3.87~cm. Mean penetration remains similar (5.26 versus 5.11~mm), while the VLM contact score rises from 3.04 to 3.52. Together with the 2D containment increase and elimination of three missed masks in Table~\ref{tab:contact-localization}, these results show that the complete refinement procedure improves contact localization and downstream body fitting.
+Table~\ref{tab:quantitative} compares bodies fitted with first-round contact masks (single-shot contacts) and refined masks (full method). Both settings share the same human initialization and optimizer. Refining the masks lowers mean contact distance from 6.98 to 3.87~cm. Mean penetration remains similar (5.26 versus 5.11~mm), while the VLM contact score rises from 3.04 to 3.52. Together with the 2D containment increase and elimination of three missed masks in Table~\ref{tab:contact-localization}, these results show that the complete refinement procedure improves contact localization and downstream body fitting.
 
-The other VLM criteria also rise, giving overall scores of 3.16, 3.70, and 4.08 for the initialization, single-shot, and full settings. CLIP and the descriptive across-interaction diversity statistics change little; neither explains the main contact-distance gain.
+The other VLM criteria also rise, increasing the overall score from 3.70 for single-shot contacts to 4.08 for the full method. CLIP and the descriptive across-interaction diversity statistics change little; neither explains the main contact-distance gain.
 
 \bibliographystyle{eg-alpha-doi}
 \bibliography{references}

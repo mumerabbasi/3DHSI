@@ -1,9 +1,9 @@
 % Full-width qualitative comparison. Source images and matched view IDs are
 % recorded in figures/qualitative/manifest.json.
-\newcommand{\qualcompinput}[2]{%
+\newcommand{\qualcompinput}[6]{%
   \begin{minipage}[c][31mm][c]{0.183\textwidth}
     \centering\scriptsize\bfseries #2\par\smallskip
-    \includegraphics[width=\linewidth,height=22mm,keepaspectratio]{figures/qualitative/#1_scene.jpg}
+    \includegraphics[trim=#3bp #4bp #5bp #6bp,clip,width=22mm,height=22mm,keepaspectratio]{figures/qualitative/#1_scene.jpg}
   \end{minipage}}
 
 \newcommand{\qualcomprender}[2]{%
@@ -12,8 +12,8 @@
     \includegraphics[width=\linewidth,height=30mm,keepaspectratio]{figures/qualitative/#1_#2.jpg}
   \end{minipage}}
 
-\newcommand{\qualcomprow}[2]{%
-  \qualcompinput{#1}{#2} &
+\newcommand{\qualcomprow}[6]{%
+  \qualcompinput{#1}{#2}{#3}{#4}{#5}{#6} &
   \qualcomprender{#1}{genzi} &
   \qualcomprender{#1}{prox} &
   \qualcomprender{#1}{physic} &
@@ -27,14 +27,14 @@
     \toprule
     Input instruction and scene & GenZI & PROX & PhySIC & Ours \\
     \midrule
-    \qualcomprow{curtain}{Opening a curtain}
-    \qualcomprow{table}{Sitting on the wooden table}
-    \qualcomprow{bicyclesit}{Sitting on a bicycle}
-    \qualcomprow{staircasebed}{Climbing onto the top bed}
-    \qualcomprow{bicyclestand}{Removing the bicycle from its stand}
-    \qualcomprow{ladderdown}{Stepping down from the ladder}
+    \qualcomprow{curtain}{Opening a curtain}{1006}{366}{242}{298}
+    \qualcomprow{table}{Sitting on the wooden table}{605}{76}{427}{372}
+    \qualcomprow{bicyclesit}{Sitting on a bicycle}{602}{380}{384}{22}
+    \qualcomprow{staircasebed}{Climbing onto the top bed}{250}{264}{712}{114}
+    \qualcomprow{bicyclestand}{Removing the bicycle from its stand}{219}{122}{597}{110}
+    \qualcomprow{ladderdown}{Stepping down from the ladder}{362}{111}{333}{0}
     \bottomrule
   \end{tabular}
-  \caption{Qualitative comparison of six interactions. Our method takes a text instruction, a calibrated RGB scene view, and a reconstructed scene mesh, and generates an image of a person performing the interaction. PROX and PhySIC use this same generated human frame for fitting, whereas GenZI generates its own image hypotheses. Each row shows one common evaluation camera view for the four rendered outputs.}
+  \caption{Qualitative comparison of six interactions. Our method takes a text instruction, a calibrated RGB scene view, and a reconstructed scene mesh, and generates an image of a person performing the interaction. PROX and PhySIC use the same generated human frame for fitting, whereas GenZI generates its own image hypotheses. Each row shows one common evaluation camera view for the four rendered outputs.}
   \label{fig:qualitative-comparison}
 \end{figure*}

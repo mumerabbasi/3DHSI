@@ -20,7 +20,20 @@
       "agentic": "cupboard_agentic.jpg",
       "single_v03": "cupboard_single_v03.jpg",
       "ours_v03": "cupboard_ours_v03.jpg"
-    }
+    },
+    "scene_display_crop_xyxy": [
+      98,
+      0,
+      669,
+      571
+    ],
+    "scene_display_crop_original_xyxy": [
+      190,
+      0,
+      1302,
+      1112
+    ],
+    "scene_display_crop_source": "3DHSI/03_Estimate_Contact_Agentic/output/interaction_24/assets/target_scene_crop.png"
   },
   {
     "slug": "bicycle",
@@ -43,7 +56,20 @@
       "agentic": "bicycle_agentic.jpg",
       "single_v01": "bicycle_single_v01.jpg",
       "ours_v01": "bicycle_ours_v01.jpg"
-    }
+    },
+    "scene_display_crop_xyxy": [
+      112,
+      56,
+      593,
+      537
+    ],
+    "scene_display_crop_original_xyxy": [
+      219,
+      110,
+      1155,
+      1046
+    ],
+    "scene_display_crop_source": "3DHSI/03_Estimate_Contact_Agentic/output/interaction_22/assets/target_scene_crop.png"
   },
   {
     "slug": "table",
@@ -66,6 +92,19 @@
       "agentic": "table_agentic.jpg",
       "single_v04": "table_single_v04.jpg",
       "ours_v04": "table_ours_v04.jpg"
-    }
+    },
+    "scene_display_crop_xyxy": [
+      311,
+      191,
+      681,
+      561
+    ],
+    "scene_display_crop_original_xyxy": [
+      605,
+      372,
+      1325,
+      1092
+    ],
+    "scene_display_crop_source": "3DHSI/03_Estimate_Contact_Agentic/output/interaction_02/assets/target_scene_crop.png"
   }
 ]
