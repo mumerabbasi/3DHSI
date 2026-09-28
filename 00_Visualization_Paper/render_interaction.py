@@ -138,7 +138,7 @@ def parse_args():
     parser.add_argument("--project-dir", type=Path, default=PROJECT_DIR)
     parser.add_argument("--blender-bin", default=shutil.which("blender") or "/my_workspace/blender-4.2.17-linux-x64/blender")
     parser.add_argument("--gpu-index", default="auto", help="GPU index, or auto (most free memory)")
-    parser.add_argument("--margin", type=float, default=0.12,
+    parser.add_argument("--margin", type=float, default=0.02,
                         help="Padding per side, relative to the longest combined human bound (default .12)")
     parser.add_argument("--context-box", nargs=4, type=float, metavar=("X0", "Y0", "X1", "Y1"),
                         help="Also include this scene region, in 4290x2560 image coordinates")

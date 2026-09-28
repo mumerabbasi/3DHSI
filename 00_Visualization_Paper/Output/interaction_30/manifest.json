@@ -5,28 +5,28 @@
     2560
   ],
   "crop_base_xyxy": [
-    1273,
-    268,
-    2958,
-    1953
+    1409,
+    404,
+    2822,
+    1817
   ],
   "crop_render_xyxy": [
-    1273,
-    268,
-    2958,
-    1953
+    1409,
+    404,
+    2822,
+    1817
   ],
   "render_multiplier": 1,
   "final_render_resolution": [
     4290,
     2560
   ],
-  "native_crop_size": 1685,
+  "native_crop_size": 1413,
   "output_size": [
     1024,
     1024
   ],
-  "margin": 0.12,
+  "margin": 0.02,
   "context_box": null,
   "crop_override": null,
   "methods": {
@@ -43,7 +43,7 @@
       ],
       "projection_check_max_error_px": 0.0011470136610114423,
       "vertex_count": 10475,
-      "crop_occupancy": 0.7435401101913425
+      "crop_occupancy": 0.8866702658686568
     },
     "prox": {
       "bounds_base_xyxy": [
@@ -58,7 +58,7 @@
       ],
       "projection_check_max_error_px": 0.0014387953852974533,
       "vertex_count": 10475,
-      "crop_occupancy": 0.7113893271526648
+      "crop_occupancy": 0.8483305139789385
     },
     "physic": {
       "bounds_base_xyxy": [
@@ -73,7 +73,7 @@
       ],
       "projection_check_max_error_px": 0.001246834049879908,
       "vertex_count": 10475,
-      "crop_occupancy": 0.7282516206835602
+      "crop_occupancy": 0.8684387691803248
     },
     "ours": {
       "bounds_base_xyxy": [
@@ -88,7 +88,7 @@
       ],
       "projection_check_max_error_px": 0.0012457415731432775,
       "vertex_count": 10475,
-      "crop_occupancy": 0.7172891707446609
+      "crop_occupancy": 0.855366067023888
     }
   },
   "style": {
