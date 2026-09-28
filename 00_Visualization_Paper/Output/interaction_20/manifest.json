@@ -1,0 +1,140 @@
+{
+  "status": "complete",
+  "base_resolution": [
+    4290,
+    2560
+  ],
+  "crop_base_xyxy": [
+    1682,
+    719,
+    3154,
+    2191
+  ],
+  "crop_render_xyxy": [
+    1682,
+    719,
+    3154,
+    2191
+  ],
+  "render_multiplier": 1,
+  "final_render_resolution": [
+    4290,
+    2560
+  ],
+  "native_crop_size": 1472,
+  "output_size": [
+    1024,
+    1024
+  ],
+  "margin": 0.02,
+  "context_box": null,
+  "crop_override": null,
+  "methods": {
+    "genzi": {
+      "bounds_base_xyxy": [
+        2508.7045395769796,
+        964.5739166163473,
+        3017.265916440939,
+        2162.4741307484746
+      ],
+      "depth_range_m": [
+        1.8784460005030041,
+        2.7740752111001115
+      ],
+      "projection_check_max_error_px": 0.0005829864931001794,
+      "vertex_count": 10475,
+      "crop_occupancy": 0.8137909063397604
+    },
+    "prox": {
+      "bounds_base_xyxy": [
+        2031.1695245397482,
+        914.6415304672134,
+        2519.876135520906,
+        1635.7397776778962
+      ],
+      "depth_range_m": [
+        2.6980141860126707,
+        3.536414588498424
+      ],
+      "projection_check_max_error_px": 0.000334653248955874,
+      "vertex_count": 10475,
+      "crop_occupancy": 0.4898765266376921
+    },
+    "physic": {
+      "bounds_base_xyxy": [
+        1820.4637585492305,
+        837.1999236659772,
+        2596.882583246708,
+        1494.8049150434874
+      ],
+      "depth_range_m": [
+        3.010042793124043,
+        3.61332764222497
+      ],
+      "projection_check_max_error_px": 0.0003922984519704187,
+      "vertex_count": 10475,
+      "crop_occupancy": 0.5274584406912209
+    },
+    "ours": {
+      "bounds_base_xyxy": [
+        1899.9004944559797,
+        747.7300393194151,
+        2845.219899349613,
+        1790.6345318787135
+      ],
+      "depth_range_m": [
+        2.498954576465998,
+        3.271385792041329
+      ],
+      "projection_check_max_error_px": 0.0004205183302019577,
+      "vertex_count": 10475,
+      "crop_occupancy": 0.70849489983648
+    }
+  },
+  "style": {
+    "source_blend": "/my_workspace/4DHHOI/3DHSI/06_Evaluate_Interaction/output/interaction_20/semantics/assets/render_scene.blend",
+    "engine": "CYCLES",
+    "cycles_samples": 64,
+    "denoising": true,
+    "view_transform": "Filmic",
+    "look": "Medium High Contrast",
+    "exposure": 0.0,
+    "gamma": 1.0,
+    "lights": [
+      {
+        "name": "room_overhead_softbox",
+        "matrix_world": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            4.219558238983154
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.88194739818573
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            4.244733810424805
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "energy": 100.0,
+        "type": "AREA"
+      }
+    ]
+  },
+  "warnings": [
+    "prox occupies only 49% of the shared crop; review framing"
+  ]
+}
