@@ -1,0 +1,104 @@
+{
+  "methods": {
+    "genzi": {
+      "bounds_base_xyxy": [
+        2669.121935323639,
+        431.0390961142291,
+        3370.40927642625,
+        1476.5555028778797
+      ],
+      "depth_range_m": [
+        1.2204734666920203,
+        2.7520941563974652
+      ],
+      "projection_check_max_error_px": 0.002687708423309232,
+      "vertex_count": 10475
+    },
+    "prox": {
+      "bounds_base_xyxy": [
+        1825.9670467029591,
+        657.5988155131729,
+        2554.552902769369,
+        1849.3218548133286
+      ],
+      "depth_range_m": [
+        1.6705372163747612,
+        3.0609232512003572
+      ],
+      "projection_check_max_error_px": 0.0016608841920060513,
+      "vertex_count": 10475
+    },
+    "physic": {
+      "bounds_base_xyxy": [
+        1839.2265682777725,
+        583.3825933480131,
+        2474.39957211362,
+        1827.676358111588
+      ],
+      "depth_range_m": [
+        1.6930582747707845,
+        3.1410105937518984
+      ],
+      "projection_check_max_error_px": 0.0015763385454192758,
+      "vertex_count": 10475
+    },
+    "ours": {
+      "bounds_base_xyxy": [
+        1704.2204243989486,
+        595.6601660065717,
+        2427.874083971313,
+        1887.9925316093645
+      ],
+      "depth_range_m": [
+        1.5770233616163054,
+        3.042395589764325
+      ],
+      "projection_check_max_error_px": 0.0014664712894045806,
+      "vertex_count": 10475
+    }
+  },
+  "warnings": [],
+  "style": {
+    "source_blend": "/my_workspace/4DHHOI/3DHSI/06_Evaluate_Interaction/output/interaction_22/semantics/assets/render_scene.blend",
+    "engine": "CYCLES",
+    "cycles_samples": 64,
+    "denoising": true,
+    "view_transform": "Filmic",
+    "look": "Medium High Contrast",
+    "exposure": 0.0,
+    "gamma": 1.0,
+    "lights": [
+      {
+        "name": "room_overhead_softbox",
+        "matrix_world": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            2.375046968460083
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            2.3043012619018555
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            3.9584896564483643
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "energy": 100.0,
+        "type": "AREA"
+      }
+    ]
+  }
+}
