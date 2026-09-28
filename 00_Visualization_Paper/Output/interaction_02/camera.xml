@@ -1,5 +1,5 @@
 <!DOCTYPE ViewState>
 <project>
- <VCGCamera FocalMm="40.921936" LensDistortion="0 0" CameraType="0" BinaryData="0" CenterPx="1072 640" PixelSizeMm="0.0369161 0.0369161" ViewportPx="2145 1280" RotationMatrix="-0.0468778 0.996987 -0.0617993 0 0.0632868 0.064707 0.995895 0 0.996894 0.0427739 -0.0661298 0 0 0 0 1 " TranslationVector="-4.41677 -3.30346 -0.665066 1"/>
- <ViewSettings TrackScale="0.8772229" FarPlane="6.8169832" NearPlane="0.3031089"/>
+ <VCGCamera CameraType="0" ViewportPx="2145 1280" RotationMatrix="-0.0260072 0.999396 -0.0230433 0 0.00961915 0.0233004 0.999682 0 0.999616 0.0257774 -0.0102191 0 0 0 0 1 " BinaryData="0" FocalMm="40.921936" PixelSizeMm="0.0369161 0.0369161" TranslationVector="-4.14938 -3.35652 -0.612605 1" LensDistortion="0 0" CenterPx="1072 640"/>
+ <ViewSettings NearPlane="0.3031089" FarPlane="11.832137" TrackScale="1.263201"/>
 </project>
