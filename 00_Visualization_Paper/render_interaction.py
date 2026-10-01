@@ -83,8 +83,8 @@ def pick_gpu(requested):
         return None
 
 
-def run_blender(blender, config_path, output, phase, gpu, multiplier=1):
-    log_path = output / "logs" / f"{phase}_{multiplier}x.log"
+def run_blender(blender, config_path, output, phase, gpu, multiplier=1, log_prefix=""):
+    log_path = output / "logs" / f"{log_prefix}{phase}_{multiplier}x.log"
     command = [blender, "--background", "--python-exit-code", "1", "--python",
                str(MODULE_DIR / "blender_render.py"), "--", str(config_path),
                "--phase", phase, "--multiplier", str(multiplier)]

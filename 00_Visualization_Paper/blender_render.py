@@ -34,10 +34,12 @@ def setup(config):
         raise RuntimeError("Module 06 human material is missing")
     reference.hide_render = True
     humans = {}
-    for method in METHODS:
+    for method in config.get("methods", METHODS):
         obj = import_ply(config["human_meshes"][method])
         obj.name = f"paper_{method}"
         obj.matrix_world = reference.matrix_world.copy()
+        if method == "genzi":
+            obj.location.z += float(config.get("human_z_offset_m", 0.0))
         obj.data.materials.clear()
         for material in materials:
             obj.data.materials.append(material)
@@ -155,7 +157,7 @@ def render(config, scene, humans, multiplier):
     scene.render.resolution_y = BASE_HEIGHT * multiplier
     out = Path(config["output_dir"]) / "full" / f"{scene.render.resolution_x}x{scene.render.resolution_y}"
     out.mkdir(parents=True, exist_ok=True)
-    for method in METHODS:
+    for method in config.get("methods", METHODS):
         for key, obj in humans.items():
             obj.hide_render = key != method
         scene.render.filepath = str(out / f"{method}.jpg")
